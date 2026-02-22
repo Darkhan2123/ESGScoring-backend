@@ -25,8 +25,6 @@ def get_tokens_for_user(user: User) -> dict:
     }
 
 
-# ── Public auth ──────────────────────────────────────────────
-
 class RegisterView(APIView):
     """
     POST /api/auth/register/
@@ -100,7 +98,6 @@ class RefreshTokenView(APIView):
             )
 
 
-# ── Authenticated user ───────────────────────────────────────
 
 class LogoutView(APIView):
     """
@@ -162,7 +159,6 @@ class ChangePasswordView(APIView):
         return Response({'detail': 'Password updated successfully.'})
 
 
-# ── Admin-only ───────────────────────────────────────────────
 
 class AdminCreateUserView(APIView):
     """
