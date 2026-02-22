@@ -15,7 +15,7 @@ class IsStudent(BasePermission):
     def has_permission(self, request, view):
         return request.user.is_authenticated and request.user.role == 'student'
 
-
+`
 class IsShopOwner(BasePermission):
     def has_permission(self, request, view):
         return request.user.is_authenticated and request.user.role == 'shop_owner'
