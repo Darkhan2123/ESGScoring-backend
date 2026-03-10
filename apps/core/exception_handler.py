@@ -3,7 +3,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework import status
 from .exceptions import (
-    InsufficientStarsError,
+    InsufficientPointsError,
     InvalidStateTransitionError,
     InvalidVerificationCodeError,
     EventFullError,
@@ -11,7 +11,7 @@ from .exceptions import (
 )
 
 DOMAIN_EXCEPTION_MAP = {
-    InsufficientStarsError: status.HTTP_400_BAD_REQUEST,
+    InsufficientPointsError: status.HTTP_400_BAD_REQUEST,
     InvalidStateTransitionError: status.HTTP_409_CONFLICT,
     InvalidVerificationCodeError: status.HTTP_400_BAD_REQUEST,
     EventFullError: status.HTTP_409_CONFLICT,

@@ -15,7 +15,7 @@ class User(AbstractUser):
     full_name = models.CharField(max_length=255, blank=True)
     phone = models.CharField(max_length=20, blank=True)
     avatar = models.ImageField(upload_to='avatars/', null=True, blank=True)
-    stars = models.PositiveIntegerField(default=0)
+    points = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
     USERNAME_FIELD = 'email'

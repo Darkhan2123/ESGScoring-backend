@@ -197,7 +197,7 @@ class AdminListUsersView(APIView):
 class AdminUserDetailView(APIView):
     """
     GET    /api/auth/admin/users/<id>/  → view user
-    PATCH  /api/auth/admin/users/<id>/  → update role, is_active, stars, etc.
+    PATCH  /api/auth/admin/users/<id>/  → update role, is_active, points, etc.
     DELETE /api/auth/admin/users/<id>/  → deactivate user
     """
     permission_classes = [IsAuthenticated, IsAdmin]
@@ -215,7 +215,7 @@ class AdminUserDetailView(APIView):
         except User.DoesNotExist:
             return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        allowed_fields = {'role', 'is_active', 'stars', 'full_name', 'phone', 'student_id'}
+        allowed_fields = {'role', 'is_active', 'points', 'full_name', 'phone', 'student_id'}
         for field, value in request.data.items():
             if field in allowed_fields:
                 setattr(user, field, value)

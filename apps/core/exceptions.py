@@ -1,7 +1,7 @@
 class DomainException(Exception):
     pass
 
-class InsufficientStarsError(DomainException):
+class InsufficientPointsError(DomainException):
     pass
 
 class InvalidStateTransitionError(DomainException):
