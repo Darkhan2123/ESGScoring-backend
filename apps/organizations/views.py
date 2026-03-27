@@ -1,4 +1,5 @@
 from rest_framework import status
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -10,6 +11,7 @@ from .serializers import (
     OrganizationListSerializer,
     CreateOrganizationSerializer,
     UpdateOrganizationSerializer,
+    AdminUpdateOrganizationSerializer,
 )
 
 
@@ -76,7 +78,9 @@ class MyOrganizationView(APIView):
 
     def patch(self, request):
         try:
-            org = Organization.objects.get(owner=request.user, is_active=True)
+            org = Organization.objects.select_related('owner').get(
+                owner=request.user, is_active=True,
+            )
         except Organization.DoesNotExist:
             return Response(
                 {'error': 'You do not own any organization.'},
@@ -86,8 +90,8 @@ class MyOrganizationView(APIView):
             org, data=request.data, partial=True,
         )
         serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(OrganizationSerializer(org).data)
+        updated_org = serializer.save()
+        return Response(OrganizationSerializer(updated_org).data)
 
 
 # ─── Admin endpoints ───────────────────────────────────────────────
@@ -127,7 +131,11 @@ class AdminOrganizationListView(APIView):
         search = request.query_params.get('search')
         if search:
             orgs = orgs.filter(name__icontains=search)
-        return Response(OrganizationSerializer(orgs, many=True).data)
+
+        paginator = PageNumberPagination()
+        paginator.page_size = 20
+        page = paginator.paginate_queryset(orgs, request)
+        return paginator.get_paginated_response(OrganizationSerializer(page, many=True).data)
 
 
 class AdminOrganizationDetailView(APIView):
@@ -150,17 +158,17 @@ class AdminOrganizationDetailView(APIView):
 
     def patch(self, request, org_id):
         try:
-            org = Organization.objects.get(pk=org_id)
+            org = Organization.objects.select_related('owner').get(pk=org_id)
         except Organization.DoesNotExist:
             return Response(
                 {'error': 'Organization not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        allowed_fields = {'name', 'description', 'is_active', 'owner_id'}
-        for field, value in request.data.items():
-            if field in allowed_fields:
-                setattr(org, field, value)
-        org.save()
+        serializer = AdminUpdateOrganizationSerializer(
+            org, data=request.data, partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        org = serializer.save()
         return Response(OrganizationSerializer(org).data)
 
     def delete(self, request, org_id):

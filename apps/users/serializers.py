@@ -115,3 +115,18 @@ class AdminCreateUserSerializer(serializers.Serializer):
             student_id=validated_data.get('student_id', ''),
             phone=validated_data.get('phone', ''),
         )
+
+
+class AdminUpdateUserSerializer(serializers.ModelSerializer):
+    """Admin PATCH /admin/users/<id>/ — validates all fields properly."""
+
+    class Meta:
+        model = User
+        fields = ['role', 'is_active', 'points', 'full_name', 'phone', 'student_id']
+
+    def validate_role(self, value):
+        if value not in dict(User.Role.choices):
+            raise serializers.ValidationError(
+                f"Invalid role. Must be one of: {', '.join(dict(User.Role.choices).keys())}"
+            )
+        return value

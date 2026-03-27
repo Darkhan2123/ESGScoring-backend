@@ -1,5 +1,6 @@
 from rest_framework import status
 from rest_framework.generics import RetrieveUpdateAPIView
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -14,6 +15,7 @@ from .serializers import (
     UpdateProfileSerializer,
     ChangePasswordSerializer,
     AdminCreateUserSerializer,
+    AdminUpdateUserSerializer,
 )
 
 
@@ -191,7 +193,11 @@ class AdminListUsersView(APIView):
         role = request.query_params.get('role')
         if role:
             users = users.filter(role=role)
-        return Response(UserSerializer(users, many=True).data)
+
+        paginator = PageNumberPagination()
+        paginator.page_size = 20
+        page = paginator.paginate_queryset(users, request)
+        return paginator.get_paginated_response(UserSerializer(page, many=True).data)
 
 
 class AdminUserDetailView(APIView):
@@ -215,11 +221,9 @@ class AdminUserDetailView(APIView):
         except User.DoesNotExist:
             return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        allowed_fields = {'role', 'is_active', 'points', 'full_name', 'phone', 'student_id'}
-        for field, value in request.data.items():
-            if field in allowed_fields:
-                setattr(user, field, value)
-        user.save()
+        serializer = AdminUpdateUserSerializer(user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
         return Response(UserSerializer(user).data)
 
     def delete(self, request, user_id):

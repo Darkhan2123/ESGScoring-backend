@@ -56,14 +56,14 @@ class CreateOrganizationSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 "This user already owns an organization."
             )
+        self._validated_owner = user
         return value
 
     def create(self, validated_data):
-        owner = User.objects.get(pk=validated_data['owner_id'])
         return Organization.objects.create(
             name=validated_data['name'],
             description=validated_data.get('description', ''),
-            owner=owner,
+            owner=self._validated_owner,
         )
 
 
@@ -80,3 +80,44 @@ class UpdateOrganizationSerializer(serializers.ModelSerializer):
                 "An organization with this name already exists."
             )
         return value
+
+
+class AdminUpdateOrganizationSerializer(serializers.ModelSerializer):
+    """Admin PATCH /admin/<id>/ — validates all admin-editable fields."""
+
+    owner_id = serializers.IntegerField(required=False)
+
+    class Meta:
+        model = Organization
+        fields = ['name', 'description', 'is_active', 'owner_id']
+
+    def validate_name(self, value):
+        if Organization.objects.filter(name=value).exclude(pk=self.instance.pk).exists():
+            raise serializers.ValidationError(
+                "An organization with this name already exists."
+            )
+        return value
+
+    def validate_owner_id(self, value):
+        try:
+            user = User.objects.get(pk=value)
+        except User.DoesNotExist:
+            raise serializers.ValidationError("User not found.")
+        if user.role != User.Role.ORGANIZATION:
+            raise serializers.ValidationError(
+                "Owner must have the 'organization' role."
+            )
+        if (
+            hasattr(user, 'organization')
+            and user.organization.pk != self.instance.pk
+        ):
+            raise serializers.ValidationError(
+                "This user already owns another organization."
+            )
+        return value
+
+    def update(self, instance, validated_data):
+        owner_id = validated_data.pop('owner_id', None)
+        if owner_id is not None:
+            instance.owner_id = owner_id
+        return super().update(instance, validated_data)

@@ -1,3 +1,4 @@
+from django.db import IntegrityError
 from rest_framework.views import exception_handler
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
@@ -66,5 +67,14 @@ def custom_exception_handler(exc, context):
                 {'error': str(exc), 'error_code': exc.__class__.__name__},
                 status=status_code,
             )
+
+    if isinstance(exc, IntegrityError):
+        return Response(
+            {
+                'error': 'A database conflict occurred. Please check your data for duplicates.',
+                'error_code': 'INTEGRITY_ERROR',
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
 
     return None
