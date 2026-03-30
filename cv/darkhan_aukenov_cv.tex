@@ -1,0 +1,165 @@
+%-------------------------
+% Resume in LaTeX
+% Author: Darkhan Aukenov
+%-------------------------
+
+\documentclass[letterpaper,11pt]{article}
+
+\usepackage{latexsym}
+\usepackage[empty]{fullpage}
+\usepackage{titlesec}
+\usepackage{marvosym}
+\usepackage[usenames,dvipsnames]{color}
+\usepackage{verbatim}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{fancyhdr}
+\usepackage[english]{babel}
+\usepackage{tabularx}
+\usepackage{multicol}
+\input{glyphtounicode}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\addtolength{\oddsidemargin}{-0.5in}
+\addtolength{\evensidemargin}{-0.5in}
+\addtolength{\textwidth}{1in}
+\addtolength{\topmargin}{-.5in}
+\addtolength{\textheight}{1.0in}
+
+\urlstyle{same}
+\raggedbottom
+\raggedright
+\setlength{\tabcolsep}{0in}
+
+% Section formatting
+\titleformat{\section}{
+  \vspace{-4pt}\scshape\raggedright\large
+}{}{0em}{}[\color{black}\titlerule \vspace{-5pt}]
+
+\pdfgentounicode=1
+
+%-------------------------
+% Custom commands
+
+\newcommand{\resumeItem}[1]{
+  \item\small{#1 \vspace{-2pt}}
+}
+
+\newcommand{\resumeSubheading}[4]{
+  \vspace{-2pt}\item
+    \begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}
+      \textbf{#1} & #2 \\
+      \textit{\small#3} & \textit{\small #4} \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeProjectHeading}[2]{
+    \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \small#1 & #2 \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.15in, label={}]}
+\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}
+\newcommand{\resumeItemListStart}{\begin{itemize}}
+\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-5pt}}
+
+%-------------------------------------------
+%%%%%%  RESUME STARTS HERE  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{document}
+
+%----------HEADING----------
+\begin{center}
+    \textbf{\Huge \scshape Darkhan Aukenov} \\ \vspace{4pt}
+    \small Python Backend Developer $|$ Almaty, Kazakhstan \\ \vspace{4pt}
+    \href{mailto:aukenov849@gmail.com}{\underline{aukenov849@gmail.com}} $\cdot$
+    \href{https://github.com/Darkhan2123}{\underline{github.com/Darkhan2123}} $\cdot$
+    \href{https://t.me/aukenov04}{\underline{@aukenov04}} $\cdot$
+    \small +7 (747) 109-75-58
+\end{center}
+
+%-----------PROFILE-----------
+\section{Profile}
+  \small{
+    Backend developer specializing in Python, Django, and FastAPI. Experienced in building RESTful APIs, implementing authentication systems, and collaborating with mobile development teams. Currently building a production-grade ESG platform with role-based access control, JWT authentication, and real-time leaderboard functionality.
+  }
+
+%-----------WORK EXPERIENCE-----------
+\section{Work Experience}
+  \resumeSubHeadingListStart
+
+    \resumeSubheading
+      {TasCredit}{Almaty, Kazakhstan}
+      {Junior Backend Developer}{[Start Date] -- [End Date]}
+      \resumeItemListStart
+        \resumeItem{Developed and maintained RESTful APIs for internal data models}
+        \resumeItem{Worked in a team environment following backend development best practices}
+        \resumeItem{Gained hands-on experience with production codebases and code review processes}
+      \resumeItemListEnd
+
+  \resumeSubHeadingListEnd
+
+%-----------PROJECTS-----------
+\section{Projects}
+  \resumeSubHeadingListStart
+
+    \resumeProjectHeading
+      {\textbf{ESG Community API} $|$ \emph{Django 5, DRF, PostgreSQL, JWT, Docker}}{2025 -- Present}
+      \resumeItemListStart
+        \resumeItem{Built a gamification platform for university ESG activities: organizations post tasks, students participate and earn points, ranked on a leaderboard}
+        \resumeItem{Implemented Role-Based Access Control (RBAC) with 4 roles (Admin, Organization, Student, ShopOwner) and scoped permissions per endpoint}
+        \resumeItem{Collaborated with Android and iOS developers — designed and documented API contracts via auto-generated Swagger UI (drf-spectacular)}
+        \resumeItem{Built custom exception handler returning unified \texttt{\{error, error\_code, errors\}} format for mobile clients}
+        \resumeItem{Secured authentication with JWT — 30-min access tokens, 7-day refresh tokens with rotation and blacklist on logout}
+        \resumeItem{Implemented atomic point awards using \texttt{transaction.atomic()} and \texttt{select\_for\_update()} to prevent race conditions}
+      \resumeItemListEnd
+
+    \resumeProjectHeading
+      {\textbf{Crypto Dashboard} $|$ \emph{FastAPI, Vite, CoinMarketCap API, Docker}}{May 2024}
+      \resumeItemListStart
+        \resumeItem{Built a real-time cryptocurrency tracking dashboard fetching live data from CoinMarketCap API}
+        \resumeItem{Deployed the application with Docker for consistent environment management}
+      \resumeItemListEnd
+
+    \resumeProjectHeading
+      {\textbf{University Management System} $|$ \emph{Java}}{December 2023}
+      \resumeItemListStart
+        \resumeItem{Developed a structured Java application for managing course registrations, student performance, and administrative tasks}
+        \resumeItem{\textbf{Awarded best team project of the year} for system design and implementation}
+      \resumeItemListEnd
+
+  \resumeSubHeadingListEnd
+
+%-----------TECHNICAL SKILLS-----------
+\section{Technical Skills}
+ \begin{itemize}[leftmargin=0.15in, label={}]
+    \small{\item{
+     \textbf{Languages:} Python, SQL, Java \\
+     \textbf{Frameworks:} Django, Django REST Framework, FastAPI \\
+     \textbf{Databases:} PostgreSQL, SQLite \\
+     \textbf{Tools:} Git, Docker, Celery, Kafka, AWS SES, VS Code \\
+     \textbf{Other:} JWT, REST API design, Swagger/OpenAPI, RBAC \\
+     \textbf{Languages:} Kazakh (native), Russian (fluent), English (advanced)
+    }}
+ \end{itemize}
+
+%-----------EDUCATION-----------
+\section{Education}
+  \resumeSubHeadingListStart
+    \resumeSubheading
+      {Kazakh-British Technical University}{Almaty, Kazakhstan}
+      {Bachelor of Information and Communication Technology}{2022 -- Present}
+    \resumeSubheading
+      {Kazakh-Turkish Lyceum}{Semey, Kazakhstan}
+      {High School Diploma}{2017 -- 2022}
+  \resumeSubHeadingListEnd
+
+%-------------------------------------------
+\end{document}
