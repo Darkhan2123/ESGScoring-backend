@@ -20,7 +20,7 @@ class TaskListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'description', 'organization_name',
             'points_reward', 'max_participants', 'participants_count',
-            'deadline', 'created_at',
+            'location', 'event_datetime', 'created_at',
         ]
 
     def get_participants_count(self, obj):
@@ -44,7 +44,7 @@ class TaskSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'description', 'organization_id',
             'organization_name', 'points_reward', 'max_participants',
-            'participants_count', 'is_full', 'deadline', 'is_active',
+            'participants_count', 'is_full', 'location', 'event_datetime', 'is_active',
             'created_at', 'updated_at',
         ]
 
@@ -68,7 +68,8 @@ class CreateTaskSerializer(serializers.Serializer):
     max_participants = serializers.IntegerField(
         min_value=1, required=False, default=None,
     )
-    deadline = serializers.DateTimeField(required=False, default=None)
+    location = serializers.CharField(max_length=255, required=False, default='')
+    event_datetime = serializers.DateTimeField(required=False, default=None)
 
     def create(self, validated_data):
         organization = self.context['organization']
@@ -78,7 +79,8 @@ class CreateTaskSerializer(serializers.Serializer):
             organization=organization,
             points_reward=validated_data['points_reward'],
             max_participants=validated_data.get('max_participants'),
-            deadline=validated_data.get('deadline'),
+            location=validated_data.get('location', ''),
+            event_datetime=validated_data.get('event_datetime'),
         )
 
 
@@ -87,7 +89,7 @@ class UpdateTaskSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Task
-        fields = ['title', 'description', 'max_participants', 'deadline', 'is_active']
+        fields = ['title', 'description', 'max_participants', 'location', 'event_datetime', 'is_active']
 
 
 # ─── Participation serializers ─────────────────────────────────────
