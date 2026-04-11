@@ -9,6 +9,7 @@ from .exceptions import (
     InvalidVerificationCodeError,
     EventFullError,
     DuplicateRequestError,
+    ShopInactiveError,
 )
 
 DOMAIN_EXCEPTION_MAP = {
@@ -17,6 +18,7 @@ DOMAIN_EXCEPTION_MAP = {
     InvalidVerificationCodeError: status.HTTP_400_BAD_REQUEST,
     EventFullError: status.HTTP_409_CONFLICT,
     DuplicateRequestError: status.HTTP_409_CONFLICT,
+    ShopInactiveError: status.HTTP_400_BAD_REQUEST,
 }
 
 
