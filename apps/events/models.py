@@ -44,6 +44,8 @@ class Task(models.Model):
 
     @property
     def approved_count(self):
+        if '_approved_count' in self.__dict__:
+            return self.__dict__['_approved_count']
         return self.participations.filter(
             status__in=[
                 TaskParticipation.Status.APPROVED,

@@ -1,5 +1,5 @@
 from django.db import transaction
-from django.db.models import F
+from django.db.models import Count, F, Q
 from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
@@ -72,6 +72,16 @@ class TaskListView(APIView):
         search = request.query_params.get('search')
         if search:
             tasks = tasks.filter(title__icontains=search)
+
+        tasks = tasks.annotate(
+            _approved_count=Count(
+                'participations',
+                filter=Q(participations__status__in=[
+                    TaskParticipation.Status.APPROVED,
+                    TaskParticipation.Status.COMPLETED,
+                ]),
+            ),
+        )
 
         paginator = PageNumberPagination()
         paginator.page_size = 20
@@ -463,6 +473,16 @@ class AdminTaskListView(APIView):
         search = request.query_params.get('search')
         if search:
             tasks = tasks.filter(title__icontains=search)
+
+        tasks = tasks.annotate(
+            _approved_count=Count(
+                'participations',
+                filter=Q(participations__status__in=[
+                    TaskParticipation.Status.APPROVED,
+                    TaskParticipation.Status.COMPLETED,
+                ]),
+            ),
+        )
 
         paginator = PageNumberPagination()
         paginator.page_size = 20
