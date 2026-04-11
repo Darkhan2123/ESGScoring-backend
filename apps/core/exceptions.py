@@ -15,3 +15,6 @@ class EventFullError(DomainException):
 
 class DuplicateRequestError(DomainException):
     pass
+
+class ShopInactiveError(DomainException):
+    pass
