@@ -1,5 +1,5 @@
 from django.db import transaction
-from django.db.models import Count, F, Q
+from django.db.models import Count, Exists, F, OuterRef, Q
 from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
@@ -81,13 +81,19 @@ class TaskListView(APIView):
                     TaskParticipation.Status.COMPLETED,
                 ]),
             ),
+            _is_registered=Exists(
+                TaskParticipation.objects.filter(
+                    task=OuterRef('pk'),
+                    student=request.user,
+                ),
+            ),
         )
 
         paginator = PageNumberPagination()
         paginator.page_size = 20
         page = paginator.paginate_queryset(tasks, request)
         return paginator.get_paginated_response(
-            TaskListSerializer(page, many=True).data,
+            TaskListSerializer(page, many=True, context={'request': request}).data,
         )
 
 
@@ -101,19 +107,39 @@ class TaskDetailView(APIView):
 
     def get(self, request, task_id):
         try:
-            task = Task.objects.select_related('organization').get(pk=task_id)
+            task = (
+                Task.objects
+                .select_related('organization')
+                .annotate(
+                    _approved_count=Count(
+                        'participations',
+                        filter=Q(participations__status__in=[
+                            TaskParticipation.Status.APPROVED,
+                            TaskParticipation.Status.COMPLETED,
+                        ]),
+                    ),
+                    _is_registered=Exists(
+                        TaskParticipation.objects.filter(
+                            task=OuterRef('pk'),
+                            student=request.user,
+                        ),
+                    ),
+                )
+                .get(pk=task_id)
+            )
         except Task.DoesNotExist:
             return Response(
                 {'error': 'Task not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        ctx = {'request': request}
         # Org owner sees verification code, others don't
         if (
             request.user.role == User.Role.ORGANIZATION
             and task.organization.owner_id == request.user.pk
         ):
-            return Response(TaskOrgSerializer(task).data)
-        return Response(TaskSerializer(task).data)
+            return Response(TaskOrgSerializer(task, context=ctx).data)
+        return Response(TaskSerializer(task, context=ctx).data)
 
     def patch(self, request, task_id):
         if request.user.role != User.Role.ORGANIZATION:
