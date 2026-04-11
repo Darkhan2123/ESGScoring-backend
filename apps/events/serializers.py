@@ -14,17 +14,26 @@ class TaskListSerializer(serializers.ModelSerializer):
         source='organization.name', read_only=True,
     )
     participants_count = serializers.SerializerMethodField()
+    is_registered = serializers.SerializerMethodField()
 
     class Meta:
         model = Task
         fields = [
             'id', 'title', 'description', 'organization_name',
             'points_reward', 'max_participants', 'participants_count',
-            'location', 'event_datetime', 'created_at',
+            'is_registered', 'location', 'event_datetime', 'created_at',
         ]
 
     def get_participants_count(self, obj):
         return obj.approved_count
+
+    def get_is_registered(self, obj):
+        if hasattr(obj, '_is_registered'):
+            return obj._is_registered
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            return obj.participations.filter(student=request.user).exists()
+        return False
 
 
 class TaskSerializer(serializers.ModelSerializer):
@@ -38,18 +47,27 @@ class TaskSerializer(serializers.ModelSerializer):
     )
     participants_count = serializers.SerializerMethodField()
     is_full = serializers.BooleanField(read_only=True)
+    is_registered = serializers.SerializerMethodField()
 
     class Meta:
         model = Task
         fields = [
             'id', 'title', 'description', 'organization_id',
             'organization_name', 'points_reward', 'max_participants',
-            'participants_count', 'is_full', 'location', 'event_datetime', 'is_active',
+            'participants_count', 'is_full', 'is_registered', 'location', 'event_datetime', 'is_active',
             'created_at', 'updated_at',
         ]
 
     def get_participants_count(self, obj):
         return obj.approved_count
+
+    def get_is_registered(self, obj):
+        if hasattr(obj, '_is_registered'):
+            return obj._is_registered
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            return obj.participations.filter(student=request.user).exists()
+        return False
 
 
 class TaskOrgSerializer(TaskSerializer):
