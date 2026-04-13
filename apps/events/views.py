@@ -1,5 +1,5 @@
 from django.db import transaction
-from django.db.models import Count, Exists, F, OuterRef, Q
+from django.db.models import Count, F, OuterRef, Q, Subquery
 from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
@@ -81,11 +81,11 @@ class TaskListView(APIView):
                     TaskParticipation.Status.COMPLETED,
                 ]),
             ),
-            _is_registered=Exists(
+            _registration_status=Subquery(
                 TaskParticipation.objects.filter(
                     task=OuterRef('pk'),
                     student=request.user,
-                ),
+                ).values('status')[:1]
             ),
         )
 
@@ -118,11 +118,11 @@ class TaskDetailView(APIView):
                             TaskParticipation.Status.COMPLETED,
                         ]),
                     ),
-                    _is_registered=Exists(
+                    _registration_status=Subquery(
                         TaskParticipation.objects.filter(
                             task=OuterRef('pk'),
                             student=request.user,
-                        ),
+                        ).values('status')[:1]
                     ),
                 )
                 .get(pk=task_id)

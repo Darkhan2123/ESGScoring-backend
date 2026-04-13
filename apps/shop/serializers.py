@@ -18,7 +18,7 @@ class ShopListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Shop
         fields = [
-            'id', 'name', 'description', 'logo', 'shop_type',
+            'id', 'name', 'description', 'address', 'logo', 'shop_type',
             'owner_name', 'items_count', 'created_at',
         ]
 
@@ -41,7 +41,7 @@ class ShopSerializer(serializers.ModelSerializer):
     class Meta:
         model = Shop
         fields = [
-            'id', 'name', 'description', 'logo', 'shop_type',
+            'id', 'name', 'description', 'address', 'logo', 'shop_type',
             'owner_id', 'owner_name', 'is_active',
             'created_at', 'updated_at',
         ]
@@ -53,6 +53,7 @@ class CreateShopSerializer(serializers.Serializer):
 
     name = serializers.CharField(max_length=255)
     description = serializers.CharField(required=False, default='')
+    address = serializers.CharField(max_length=255, required=False, default='')
     shop_type = serializers.ChoiceField(choices=Shop.Type.choices)
     owner_id = serializers.IntegerField()
 
@@ -83,6 +84,7 @@ class CreateShopSerializer(serializers.Serializer):
         return Shop.objects.create(
             name=validated_data['name'],
             description=validated_data.get('description', ''),
+            address=validated_data.get('address', ''),
             shop_type=validated_data['shop_type'],
             owner=self._validated_owner,
         )
@@ -93,7 +95,7 @@ class UpdateShopSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Shop
-        fields = ['name', 'description', 'logo']
+        fields = ['name', 'description', 'address', 'logo']
 
     def validate_name(self, value):
         if Shop.objects.filter(name=value).exclude(pk=self.instance.pk).exists():
@@ -110,7 +112,7 @@ class AdminUpdateShopSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Shop
-        fields = ['name', 'description', 'is_active', 'owner_id']
+        fields = ['name', 'description', 'address', 'is_active', 'owner_id']
 
     def validate_name(self, value):
         if Shop.objects.filter(name=value).exclude(pk=self.instance.pk).exists():

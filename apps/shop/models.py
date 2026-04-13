@@ -13,6 +13,7 @@ class Shop(models.Model):
 
     name = models.CharField(max_length=255, unique=True)
     description = models.TextField(blank=True)
+    address = models.CharField(max_length=255, blank=True, default='')
     logo = models.ImageField(upload_to='shops/', null=True, blank=True)
     shop_type = models.CharField(max_length=10, choices=Type.choices)
     owner = models.OneToOneField(

@@ -14,26 +14,27 @@ class TaskListSerializer(serializers.ModelSerializer):
         source='organization.name', read_only=True,
     )
     participants_count = serializers.SerializerMethodField()
-    is_registered = serializers.SerializerMethodField()
+    registration_status = serializers.SerializerMethodField()
 
     class Meta:
         model = Task
         fields = [
             'id', 'title', 'description', 'organization_name',
             'points_reward', 'max_participants', 'participants_count',
-            'is_registered', 'location', 'event_datetime', 'created_at',
+            'registration_status', 'location', 'event_datetime', 'created_at',
         ]
 
     def get_participants_count(self, obj):
         return obj.approved_count
 
-    def get_is_registered(self, obj):
-        if hasattr(obj, '_is_registered'):
-            return obj._is_registered
+    def get_registration_status(self, obj):
+        if hasattr(obj, '_registration_status'):
+            return obj._registration_status
         request = self.context.get('request')
         if request and request.user.is_authenticated:
-            return obj.participations.filter(student=request.user).exists()
-        return False
+            participation = obj.participations.filter(student=request.user).first()
+            return participation.status if participation else None
+        return None
 
 
 class TaskSerializer(serializers.ModelSerializer):
@@ -47,27 +48,28 @@ class TaskSerializer(serializers.ModelSerializer):
     )
     participants_count = serializers.SerializerMethodField()
     is_full = serializers.BooleanField(read_only=True)
-    is_registered = serializers.SerializerMethodField()
+    registration_status = serializers.SerializerMethodField()
 
     class Meta:
         model = Task
         fields = [
             'id', 'title', 'description', 'organization_id',
             'organization_name', 'points_reward', 'max_participants',
-            'participants_count', 'is_full', 'is_registered', 'location', 'event_datetime', 'is_active',
+            'participants_count', 'is_full', 'registration_status', 'location', 'event_datetime', 'is_active',
             'created_at', 'updated_at',
         ]
 
     def get_participants_count(self, obj):
         return obj.approved_count
 
-    def get_is_registered(self, obj):
-        if hasattr(obj, '_is_registered'):
-            return obj._is_registered
+    def get_registration_status(self, obj):
+        if hasattr(obj, '_registration_status'):
+            return obj._registration_status
         request = self.context.get('request')
         if request and request.user.is_authenticated:
-            return obj.participations.filter(student=request.user).exists()
-        return False
+            participation = obj.participations.filter(student=request.user).first()
+            return participation.status if participation else None
+        return None
 
 
 class TaskOrgSerializer(TaskSerializer):
@@ -145,12 +147,16 @@ class MyParticipationSerializer(serializers.ModelSerializer):
     points_reward = serializers.IntegerField(
         source='task.points_reward', read_only=True,
     )
+    event_datetime = serializers.DateTimeField(
+        source='task.event_datetime', read_only=True,
+    )
 
     class Meta:
         model = TaskParticipation
         fields = [
             'id', 'task_id', 'task_title', 'organization_name',
-            'points_reward', 'status', 'created_at', 'updated_at',
+            'points_reward', 'event_datetime', 'status',
+            'created_at', 'updated_at',
         ]
 
 

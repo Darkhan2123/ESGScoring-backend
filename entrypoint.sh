@@ -2,20 +2,8 @@
 set -e
 
 echo "Waiting for PostgreSQL..."
-while ! python -c "
-import socket
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-try:
-    s.connect(('db', 5432))
-    s.close()
-    exit(0)
-except:
-    exit(1)
-" 2>/dev/null; do
-    echo "PostgreSQL not ready, waiting 1s..."
-    sleep 1
-done
-echo "PostgreSQL is ready!"
+sleep 5
+echo "PostgreSQL should be ready"
 
 echo "Applying database migrations..."
 python manage.py migrate --noinput
