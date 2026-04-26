@@ -1,17 +1,31 @@
+"""
+HTTP endpoints for the ``organizations`` app.
+
+Organizations are the event-producing entity of the platform: each one is owned
+by exactly one user with the ``ORGANIZATION`` role, and any task/event hangs
+off the organization FK. These views split cleanly into three audiences —
+public (read-only), the owner (self-service PATCH), and admin (full CRUD +
+soft-delete).
+"""
+from __future__ import annotations
+
 from rest_framework import status
-from rest_framework.pagination import PageNumberPagination
+from rest_framework.generics import get_object_or_404
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.core.filters import apply_bool_filter, apply_search
+from apps.core.pagination import paginate
 from apps.users.permissions import IsAdmin, IsOrganization
+
 from .models import Organization
 from .serializers import (
-    OrganizationSerializer,
-    OrganizationListSerializer,
-    CreateOrganizationSerializer,
-    UpdateOrganizationSerializer,
     AdminUpdateOrganizationSerializer,
+    CreateOrganizationSerializer,
+    OrganizationListSerializer,
+    OrganizationSerializer,
+    UpdateOrganizationSerializer,
 )
 
 
@@ -19,38 +33,27 @@ from .serializers import (
 
 
 class OrganizationListView(APIView):
-    """
-    GET /api/organizations/
-    Lists all active organizations. Any authenticated user.
-    Supports ?search=name filter.
-    """
+    """Public catalogue of active organizations."""
+
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         orgs = Organization.objects.filter(is_active=True).select_related('owner')
-        search = request.query_params.get('search')
-        if search:
-            orgs = orgs.filter(name__icontains=search)
+        orgs = apply_search(orgs, request, ['name'])
         return Response(OrganizationListSerializer(orgs, many=True).data)
 
 
 class OrganizationDetailView(APIView):
-    """
-    GET /api/organizations/<id>/
-    View organization details. Any authenticated user.
-    """
+    """Public read-only view of one active organization."""
+
     permission_classes = [IsAuthenticated]
 
     def get(self, request, org_id):
-        try:
-            org = Organization.objects.select_related('owner').get(
-                pk=org_id, is_active=True,
-            )
-        except Organization.DoesNotExist:
-            return Response(
-                {'error': 'Organization not found.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        org = get_object_or_404(
+            Organization.objects.select_related('owner'),
+            pk=org_id,
+            is_active=True,
+        )
         return Response(OrganizationSerializer(org).data)
 
 
@@ -58,51 +61,36 @@ class OrganizationDetailView(APIView):
 
 
 class MyOrganizationView(APIView):
-    """
-    GET   /api/organizations/my/  → org owner views their organization
-    PATCH /api/organizations/my/  → org owner updates their organization
-    """
+    """Self-service read/patch for the authenticated organization owner."""
+
     permission_classes = [IsAuthenticated, IsOrganization]
 
+    def _get_owned(self, user):
+        return get_object_or_404(
+            Organization.objects.select_related('owner'),
+            owner=user,
+            is_active=True,
+        )
+
     def get(self, request):
-        try:
-            org = Organization.objects.select_related('owner').get(
-                owner=request.user, is_active=True,
-            )
-        except Organization.DoesNotExist:
-            return Response(
-                {'error': 'You do not own any organization.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        org = self._get_owned(request.user)
         return Response(OrganizationSerializer(org).data)
 
     def patch(self, request):
-        try:
-            org = Organization.objects.select_related('owner').get(
-                owner=request.user, is_active=True,
-            )
-        except Organization.DoesNotExist:
-            return Response(
-                {'error': 'You do not own any organization.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        org = self._get_owned(request.user)
         serializer = UpdateOrganizationSerializer(
             org, data=request.data, partial=True,
         )
         serializer.is_valid(raise_exception=True)
-        updated_org = serializer.save()
-        return Response(OrganizationSerializer(updated_org).data)
+        return Response(OrganizationSerializer(serializer.save()).data)
 
 
 # ─── Admin endpoints ───────────────────────────────────────────────
 
 
 class AdminCreateOrganizationView(APIView):
-    """
-    POST /api/organizations/admin/create/
-    Admin creates a new organization and assigns an owner.
-    Request: { name, description?, owner_id }
-    """
+    """Admin creates an organization and assigns an owner."""
+
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def post(self, request):
@@ -116,69 +104,40 @@ class AdminCreateOrganizationView(APIView):
 
 
 class AdminOrganizationListView(APIView):
-    """
-    GET /api/organizations/admin/
-    Admin lists all organizations (including inactive).
-    Supports ?is_active=true/false and ?search=name filters.
-    """
+    """Admin-only paginated list with ``?is_active=`` and ``?search=`` filters."""
+
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get(self, request):
         orgs = Organization.objects.select_related('owner').all()
-        is_active = request.query_params.get('is_active')
-        if is_active is not None:
-            orgs = orgs.filter(is_active=is_active.lower() == 'true')
-        search = request.query_params.get('search')
-        if search:
-            orgs = orgs.filter(name__icontains=search)
-
-        paginator = PageNumberPagination()
-        paginator.page_size = 20
-        page = paginator.paginate_queryset(orgs, request)
-        return paginator.get_paginated_response(OrganizationSerializer(page, many=True).data)
+        orgs = apply_bool_filter(orgs, request, 'is_active')
+        orgs = apply_search(orgs, request, ['name'])
+        return paginate(orgs, request, OrganizationSerializer)
 
 
 class AdminOrganizationDetailView(APIView):
-    """
-    GET    /api/organizations/admin/<id>/  → view org
-    PATCH  /api/organizations/admin/<id>/  → update org
-    DELETE /api/organizations/admin/<id>/  → deactivate org
-    """
+    """Admin read/update/soft-delete of any organization."""
+
     permission_classes = [IsAuthenticated, IsAdmin]
 
+    def _get(self, org_id):
+        return get_object_or_404(
+            Organization.objects.select_related('owner'), pk=org_id,
+        )
+
     def get(self, request, org_id):
-        try:
-            org = Organization.objects.select_related('owner').get(pk=org_id)
-        except Organization.DoesNotExist:
-            return Response(
-                {'error': 'Organization not found.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        return Response(OrganizationSerializer(org).data)
+        return Response(OrganizationSerializer(self._get(org_id)).data)
 
     def patch(self, request, org_id):
-        try:
-            org = Organization.objects.select_related('owner').get(pk=org_id)
-        except Organization.DoesNotExist:
-            return Response(
-                {'error': 'Organization not found.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        org = self._get(org_id)
         serializer = AdminUpdateOrganizationSerializer(
             org, data=request.data, partial=True,
         )
         serializer.is_valid(raise_exception=True)
-        org = serializer.save()
-        return Response(OrganizationSerializer(org).data)
+        return Response(OrganizationSerializer(serializer.save()).data)
 
     def delete(self, request, org_id):
-        try:
-            org = Organization.objects.get(pk=org_id)
-        except Organization.DoesNotExist:
-            return Response(
-                {'error': 'Organization not found.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        org = self._get(org_id)
         org.is_active = False
-        org.save()
+        org.save(update_fields=['is_active'])
         return Response({'detail': 'Organization deactivated.'})

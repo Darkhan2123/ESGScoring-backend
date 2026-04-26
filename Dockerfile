@@ -18,6 +18,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Create dirs that named volumes will mirror, BEFORE chown
+RUN mkdir -p /app/media/avatars /app/staticfiles
+
 RUN python manage.py collectstatic --noinput
 
 # Non-root user

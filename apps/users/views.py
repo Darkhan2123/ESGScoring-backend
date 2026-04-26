@@ -1,83 +1,83 @@
+"""
+HTTP endpoints for authentication and user management.
+
+All views are thin DRF ``APIView`` subclasses: they parse input, delegate
+business logic to the serializer or the model layer, and return a response.
+Shared concerns (pagination, 404 handling) are delegated to helpers in
+:mod:`apps.core` so the same envelope reaches the mobile client from every
+endpoint.
+"""
+from __future__ import annotations
+
 from rest_framework import status
-from rest_framework.generics import RetrieveUpdateAPIView
-from rest_framework.pagination import PageNumberPagination
+from rest_framework.generics import RetrieveUpdateAPIView, get_object_or_404
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.core.filters import apply_exact_filter
+from apps.core.pagination import paginate
+
 from .models import User
 from .permissions import IsAdmin
 from .serializers import (
-    RegisterSerializer,
-    LoginSerializer,
-    UserSerializer,
-    UpdateProfileSerializer,
-    ChangePasswordSerializer,
     AdminCreateUserSerializer,
     AdminUpdateUserSerializer,
+    ChangePasswordSerializer,
+    LoginSerializer,
+    RegisterSerializer,
+    UpdateProfileSerializer,
+    UserSerializer,
 )
 
 
-def get_tokens_for_user(user: User) -> dict:
+def _tokens_for(user: User) -> dict[str, str]:
+    """Return an access/refresh token pair for ``user``."""
     refresh = RefreshToken.for_user(user)
+    return {'access': str(refresh.access_token), 'refresh': str(refresh)}
+
+
+def _auth_payload(user: User) -> dict:
+    """Build the response body for successful login/register."""
+    tokens = _tokens_for(user)
     return {
-        'access': str(refresh.access_token),
-        'refresh': str(refresh),
+        'token': tokens['access'],
+        'refresh': tokens['refresh'],
+        'user': UserSerializer(user).data,
     }
 
 
+# ─── Public endpoints ──────────────────────────────────────────────
+
+
 class RegisterView(APIView):
-    """
-    POST /api/auth/register/
-    Request:  { email, full_name, password, student_id }
-    Response: { token, refresh, user }
-    """
+    """Self-service registration — always creates a ``STUDENT``."""
+
     permission_classes = [AllowAny]
 
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
-        tokens = get_tokens_for_user(user)
-
-        return Response(
-            {
-                'token': tokens['access'],
-                'refresh': tokens['refresh'],
-                'user': UserSerializer(user).data,
-            },
-            status=status.HTTP_201_CREATED,
-        )
+        return Response(_auth_payload(user), status=status.HTTP_201_CREATED)
 
 
 class LoginView(APIView):
-    """
-    POST /api/auth/login/
-    Request:  { email, password }
-    Response: { token, refresh, user }
-    """
+    """Email + password authentication, returns a JWT token pair."""
+
     permission_classes = [AllowAny]
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.validated_data['user']
-        tokens = get_tokens_for_user(user)
-
-        return Response({
-            'token': tokens['access'],
-            'refresh': tokens['refresh'],
-            'user': UserSerializer(user).data,
-        })
+        return Response(_auth_payload(user))
 
 
 class RefreshTokenView(APIView):
-    """
-    POST /api/auth/token/refresh/
-    Request:  { refresh }
-    Response: { token, refresh }
-    """
+    """Exchange a valid refresh token for a new access/refresh pair."""
+
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -89,24 +89,23 @@ class RefreshTokenView(APIView):
             )
         try:
             refresh = RefreshToken(refresh_token)
-            return Response({
-                'token': str(refresh.access_token),
-                'refresh': str(refresh),
-            })
         except Exception:
             return Response(
                 {'error': 'Invalid or expired refresh token.'},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
+        return Response({
+            'token': str(refresh.access_token),
+            'refresh': str(refresh),
+        })
 
+
+# ─── Authenticated user endpoints ──────────────────────────────────
 
 
 class LogoutView(APIView):
-    """
-    POST /api/auth/logout/
-    Request:  { refresh }
-    Blacklists the refresh token so it can no longer be used.
-    """
+    """Blacklist a refresh token so it can no longer be exchanged."""
+
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -117,21 +116,22 @@ class LogoutView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            token = RefreshToken(refresh_token)
-            token.blacklist()
-            return Response({'detail': 'Successfully logged out.'})
+            RefreshToken(refresh_token).blacklist()
         except Exception:
             return Response(
                 {'error': 'Invalid token.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        return Response({'detail': 'Successfully logged out.'})
 
 
 class MeView(RetrieveUpdateAPIView):
+    """Read or patch the authenticated user's own profile.
+
+    ``UpdateProfileSerializer`` intentionally excludes ``student_id`` so
+    only admins may change it.
     """
-    GET   /api/auth/me/  → current user profile
-    PATCH /api/auth/me/  → update profile
-    """
+
     permission_classes = [IsAuthenticated]
 
     def get_object(self):
@@ -144,31 +144,26 @@ class MeView(RetrieveUpdateAPIView):
 
 
 class ChangePasswordView(APIView):
-    """
-    POST /api/auth/change-password/
-    Request: { old_password, new_password }
-    """
+    """Authenticated user changes their own password."""
+
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
         serializer = ChangePasswordSerializer(
-            data=request.data,
-            context={'request': request},
+            data=request.data, context={'request': request},
         )
         serializer.is_valid(raise_exception=True)
         request.user.set_password(serializer.validated_data['new_password'])
-        request.user.save()
+        request.user.save(update_fields=['password'])
         return Response({'detail': 'Password updated successfully.'})
 
 
+# ─── Admin endpoints ───────────────────────────────────────────────
+
 
 class AdminCreateUserView(APIView):
-    """
-    POST /api/auth/admin/create-user/
-    Super-admin creates users with any role (organization, shop_owner, etc.).
-    Request: { email, full_name, password, role, student_id?, phone? }
-    Response: { user }
-    """
+    """Admin creates a user with an arbitrary role."""
+
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def post(self, request):
@@ -182,55 +177,36 @@ class AdminCreateUserView(APIView):
 
 
 class AdminListUsersView(APIView):
-    """
-    GET /api/auth/admin/users/
-    Super-admin lists all users. Supports ?role=student filter.
-    """
+    """Admin-only paginated list of users with optional ``?role=`` filter."""
+
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get(self, request):
-        users = User.objects.all().order_by('-created_at')
-        role = request.query_params.get('role')
-        if role:
-            users = users.filter(role=role)
-
-        paginator = PageNumberPagination()
-        paginator.page_size = 20
-        page = paginator.paginate_queryset(users, request)
-        return paginator.get_paginated_response(UserSerializer(page, many=True).data)
+        users = User.objects.order_by('-created_at')
+        users = apply_exact_filter(users, request, 'role')
+        return paginate(users, request, UserSerializer)
 
 
 class AdminUserDetailView(APIView):
-    """
-    GET    /api/auth/admin/users/<id>/  → view user
-    PATCH  /api/auth/admin/users/<id>/  → update role, is_active, points, etc.
-    DELETE /api/auth/admin/users/<id>/  → deactivate user
-    """
+    """Admin read/update/soft-delete of any user account."""
+
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get(self, request, user_id):
-        try:
-            user = User.objects.get(pk=user_id)
-        except User.DoesNotExist:
-            return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
+        user = get_object_or_404(User, pk=user_id)
         return Response(UserSerializer(user).data)
 
     def patch(self, request, user_id):
-        try:
-            user = User.objects.get(pk=user_id)
-        except User.DoesNotExist:
-            return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
-
-        serializer = AdminUpdateUserSerializer(user, data=request.data, partial=True)
+        user = get_object_or_404(User, pk=user_id)
+        serializer = AdminUpdateUserSerializer(
+            user, data=request.data, partial=True,
+        )
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         return Response(UserSerializer(user).data)
 
     def delete(self, request, user_id):
-        try:
-            user = User.objects.get(pk=user_id)
-        except User.DoesNotExist:
-            return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
+        user = get_object_or_404(User, pk=user_id)
         user.is_active = False
-        user.save()
+        user.save(update_fields=['is_active'])
         return Response({'detail': 'User deactivated.'})

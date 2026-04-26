@@ -1,0 +1,134 @@
+@startuml ESG_Scoring_Platform
+
+skinparam classAttributeIconSize 0
+skinparam classFontSize 12
+skinparam classAttributeFontSize 10
+skinparam defaultFontName Arial
+skinparam shadowing false
+skinparam nodesep 20
+skinparam ranksep 20
+
+skinparam class {
+  BorderColor #555555
+  FontColor #333333
+}
+
+' ========== ROW 1: Main entities (together) ==========
+
+together {
+  class User #E3F2FD {
+    +id : int
+    +email : string
+    +role : UserRole
+    +student_id : string
+    +full_name : string
+    +phone : string
+    +avatar : ImageField
+    +points : PositiveInteger
+  }
+
+  class Organization #E8F5E9 {
+    +id : int
+    +name : string
+    +description : text
+    +logo : ImageField
+    +owner : User [OneToOne]
+    +is_active : bool
+  }
+
+  class Task #E8F5E9 {
+    +id : int
+    +title : string
+    +description : text
+    +points_reward : PositiveInteger
+    +verification_code : string
+    +organization : Organization [FK]
+    +max_participants : PositiveInteger
+    +is_active : bool
+  }
+
+  class TaskParticipation #FFECB3 {
+    +id : int
+    +task : Task [FK]
+    +student : User [FK]
+    +status : TaskParticipationStatus
+    +created_at : DateTime
+  }
+}
+
+' ========== ROW 2: Shop side + enums ==========
+
+together {
+  class Shop #FCE4EC {
+    +id : int
+    +name : string
+    +description : text
+    +address : string
+    +shop_type : ShopType
+    +owner : User [OneToOne]
+    +is_active : bool
+  }
+
+  class ShopItem #FCE4EC {
+    +id : int
+    +shop : Shop [FK]
+    +title : string
+    +description : text
+    +price : PositiveInteger
+    +photo : ImageField
+    +is_active : bool
+  }
+
+  class Purchase #FFECB3 {
+    +id : int
+    +student : User [FK]
+    +item : ShopItem [FK]
+    +points_spent : PositiveInteger
+    +promo_code : string
+    +status : PurchaseStatus
+  }
+}
+
+' ========== ROW 3: Enums ==========
+
+together {
+  enum UserRole #FFF9C4 {
+    admin
+    organization
+    student
+    shop_owner
+  }
+
+  enum TaskParticipationStatus #FFF9C4 {
+    pending
+    approved
+    rejected
+    completed
+  }
+
+  enum PurchaseStatus #FFF9C4 {
+    pending
+    ready
+    completed
+    rejected
+  }
+
+  enum ShopType #FFF9C4 {
+    internal
+    external
+  }
+}
+
+' Hidden vertical links to create 3 rows
+User -[hidden]down-> Shop
+Shop -[hidden]down-> UserRole
+
+Organization -[hidden]down-> ShopItem
+ShopItem -[hidden]down-> TaskParticipationStatus
+
+Task -[hidden]down-> Purchase
+Purchase -[hidden]down-> PurchaseStatus
+
+TaskParticipation -[hidden]down-> ShopType
+
+@enduml

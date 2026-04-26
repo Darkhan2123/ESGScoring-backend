@@ -62,11 +62,16 @@ class LoginSerializer(serializers.Serializer):
 
 
 class UpdateProfileSerializer(serializers.ModelSerializer):
-    """PATCH /me/ — students can update their own profile."""
+    """Fields a user may change on their own profile.
+
+    ``student_id`` is intentionally omitted: it identifies the user against
+    the university's records and must only be set by an administrator via
+    :class:`AdminUpdateUserSerializer`.
+    """
 
     class Meta:
         model = User
-        fields = ['full_name', 'phone', 'avatar', 'student_id']
+        fields = ['full_name', 'phone', 'avatar']
 
 
 class ChangePasswordSerializer(serializers.Serializer):

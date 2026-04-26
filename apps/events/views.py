@@ -1,139 +1,130 @@
-from django.db import transaction
-from django.db.models import Count, F, OuterRef, Q, Subquery
+"""
+HTTP endpoints for the ``events`` app.
+
+Views are deliberately thin: they read query parameters, assemble a queryset
+for the caller's role, delegate state-changing work to :mod:`apps.events.services`,
+and serialise the result. Points accounting and capacity checks live in the
+service layer so they can be reused by admin actions and management commands.
+"""
+from __future__ import annotations
+
+from django.db.models import Count, OuterRef, Q, Subquery
 from rest_framework import status
-from rest_framework.pagination import PageNumberPagination
+from rest_framework.generics import get_object_or_404
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.core.exceptions import (
-    DuplicateRequestError,
-    EventFullError,
-    InvalidStateTransitionError,
-    InvalidVerificationCodeError,
-)
+from apps.core.exceptions import EventFullError
+from apps.core.filters import apply_bool_filter, apply_exact_filter, apply_search
+from apps.core.pagination import paginate
 from apps.organizations.models import Organization
 from apps.users.models import User
 from apps.users.permissions import IsAdmin, IsOrganization, IsStudent
+
+from . import services
 from .models import Task, TaskParticipation
 from .serializers import (
-    TaskListSerializer,
-    TaskSerializer,
-    TaskOrgSerializer,
-    CreateTaskSerializer,
-    UpdateTaskSerializer,
-    ParticipationRequestSerializer,
-    MyParticipationSerializer,
     ApproveRejectSerializer,
-    VerifyCodeSerializer,
+    CreateTaskSerializer,
     LeaderboardSerializer,
+    MyParticipationSerializer,
+    ParticipationRequestSerializer,
+    TaskListSerializer,
+    TaskOrgSerializer,
+    TaskSerializer,
+    UpdateTaskSerializer,
+    VerifyCodeSerializer,
 )
 
 
-def _get_org_or_404(user):
-    """Get the organization owned by this user, or return 404 response."""
+# ─── Helpers ───────────────────────────────────────────────────────
+
+
+def _user_org(user):
+    """Return ``user.organization`` or ``None`` when the owner has none yet."""
     try:
         return user.organization
     except Organization.DoesNotExist:
         return None
 
 
+def _org_required(user):
+    """Return ``(organization, None)`` or ``(None, 404 response)``."""
+    org = _user_org(user)
+    if org is None:
+        return None, Response(
+            {'error': 'You do not have an organization assigned.'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    return org, None
+
+
+def _annotate_for_student(queryset, user):
+    """Attach ``_approved_count`` and ``_registration_status`` annotations.
+
+    The serializer layer reads these without extra queries — used for both the
+    list and detail endpoints so the two stay in sync.
+    """
+    return queryset.annotate(
+        _approved_count=Count(
+            'participations',
+            filter=Q(participations__status__in=[
+                TaskParticipation.Status.APPROVED,
+                TaskParticipation.Status.COMPLETED,
+            ]),
+        ),
+        _registration_status=Subquery(
+            TaskParticipation.objects.filter(
+                task=OuterRef('pk'),
+                student=user,
+            ).values('status')[:1]
+        ),
+    )
+
+
 # ─── Public endpoints (any authenticated user) ─────────────────────
 
 
 class TaskListView(APIView):
-    """
-    GET /api/events/tasks/
-    Students: all active tasks.
-    Org owners: their organization's tasks.
-    Admins: all tasks.
-    Supports ?search=title filter.
-    """
+    """Role-scoped list of tasks with search + pagination."""
+
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         if request.user.role == User.Role.ORGANIZATION:
-            org = _get_org_or_404(request.user)
-            if org is None:
-                return Response(
-                    {'error': 'You do not have an organization assigned.'},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
-            tasks = Task.objects.filter(
-                organization=org,
-            ).select_related('organization')
+            org, error = _org_required(request.user)
+            if error is not None:
+                return error
+            tasks = Task.objects.filter(organization=org)
         elif request.user.role == User.Role.ADMIN:
-            tasks = Task.objects.select_related('organization').all()
+            tasks = Task.objects.all()
         else:
-            tasks = Task.objects.filter(
-                is_active=True,
-            ).select_related('organization')
+            tasks = Task.objects.filter(is_active=True)
 
-        search = request.query_params.get('search')
-        if search:
-            tasks = tasks.filter(title__icontains=search)
-
-        tasks = tasks.annotate(
-            _approved_count=Count(
-                'participations',
-                filter=Q(participations__status__in=[
-                    TaskParticipation.Status.APPROVED,
-                    TaskParticipation.Status.COMPLETED,
-                ]),
-            ),
-            _registration_status=Subquery(
-                TaskParticipation.objects.filter(
-                    task=OuterRef('pk'),
-                    student=request.user,
-                ).values('status')[:1]
-            ),
-        )
-
-        paginator = PageNumberPagination()
-        paginator.page_size = 20
-        page = paginator.paginate_queryset(tasks, request)
-        return paginator.get_paginated_response(
-            TaskListSerializer(page, many=True, context={'request': request}).data,
+        tasks = tasks.select_related('organization')
+        tasks = apply_search(tasks, request, ['title'])
+        tasks = _annotate_for_student(tasks, request.user)
+        return paginate(
+            tasks, request, TaskListSerializer, context={'request': request},
         )
 
 
 class TaskDetailView(APIView):
-    """
-    GET    /api/events/tasks/<id>/  → task detail (any auth user)
-    PATCH  /api/events/tasks/<id>/  → update task (org owner only)
-    DELETE /api/events/tasks/<id>/  → deactivate task (org owner only)
-    """
+    """Read/update/soft-delete a task (update & delete are owner-only)."""
+
     permission_classes = [IsAuthenticated]
 
     def get(self, request, task_id):
-        try:
-            task = (
-                Task.objects
-                .select_related('organization')
-                .annotate(
-                    _approved_count=Count(
-                        'participations',
-                        filter=Q(participations__status__in=[
-                            TaskParticipation.Status.APPROVED,
-                            TaskParticipation.Status.COMPLETED,
-                        ]),
-                    ),
-                    _registration_status=Subquery(
-                        TaskParticipation.objects.filter(
-                            task=OuterRef('pk'),
-                            student=request.user,
-                        ).values('status')[:1]
-                    ),
-                )
-                .get(pk=task_id)
-            )
-        except Task.DoesNotExist:
-            return Response(
-                {'error': 'Task not found.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        task = get_object_or_404(
+            _annotate_for_student(
+                Task.objects.select_related('organization'), request.user,
+            ),
+            pk=task_id,
+        )
         ctx = {'request': request}
-        # Org owner sees verification code, others don't
+        # Owners need the verification code so they can display/share it;
+        # everyone else receives the public projection.
         if (
             request.user.role == User.Role.ORGANIZATION
             and task.organization.owner_id == request.user.pk
@@ -147,19 +138,14 @@ class TaskDetailView(APIView):
                 {'error': 'Only the organization owner can update this task.'},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        try:
-            task = Task.objects.select_related('organization').get(
-                pk=task_id, organization__owner=request.user,
-            )
-        except Task.DoesNotExist:
-            return Response(
-                {'error': 'Task not found.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        task = get_object_or_404(
+            Task.objects.select_related('organization'),
+            pk=task_id,
+            organization__owner=request.user,
+        )
         serializer = UpdateTaskSerializer(task, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        updated_task = serializer.save()
-        return Response(TaskOrgSerializer(updated_task).data)
+        return Response(TaskOrgSerializer(serializer.save()).data)
 
     def delete(self, request, task_id):
         if request.user.role != User.Role.ORGANIZATION:
@@ -167,46 +153,36 @@ class TaskDetailView(APIView):
                 {'error': 'Only the organization owner can deactivate this task.'},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        try:
-            task = Task.objects.get(
-                pk=task_id, organization__owner=request.user,
-            )
-        except Task.DoesNotExist:
-            return Response(
-                {'error': 'Task not found.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        task = get_object_or_404(
+            Task, pk=task_id, organization__owner=request.user,
+        )
         task.is_active = False
-        task.save()
+        task.save(update_fields=['is_active'])
         return Response({'detail': 'Task deactivated.'})
 
 
 class LeaderboardView(APIView):
-    """
-    GET /api/events/leaderboard/
-    Students ranked by points. Any authenticated user.
-    Supports ?search=name filter.
-    """
+    """Active students ordered by points, with a ``rank`` annotated per row."""
+
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         students = User.objects.filter(
             role=User.Role.STUDENT, is_active=True,
         ).order_by('-points', 'full_name')
+        students = apply_search(students, request, ['full_name'])
 
-        search = request.query_params.get('search')
-        if search:
-            students = students.filter(full_name__icontains=search)
+        # Use the paginator explicitly so we can stamp ``rank`` relative to the
+        # current page offset — the shared helper doesn't know about ranks.
+        from rest_framework.pagination import PageNumberPagination
 
         paginator = PageNumberPagination()
         paginator.page_size = 20
         page = paginator.paginate_queryset(students, request)
-
         data = LeaderboardSerializer(page, many=True).data
         start_rank = paginator.page.start_index()
         for i, entry in enumerate(data):
             entry['rank'] = start_rank + i
-
         return paginator.get_paginated_response(data)
 
 
@@ -214,31 +190,14 @@ class LeaderboardView(APIView):
 
 
 class JoinTaskView(APIView):
-    """
-    POST /api/events/tasks/<id>/join/
-    Student requests to join a task.
-    """
+    """Student requests to participate in a task (service handles the race)."""
+
     permission_classes = [IsAuthenticated, IsStudent]
 
     def post(self, request, task_id):
-        try:
-            task = Task.objects.get(pk=task_id, is_active=True)
-        except Task.DoesNotExist:
-            return Response(
-                {'error': 'Task not found.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        if task.is_full:
-            raise EventFullError('This task has reached the maximum number of participants.')
-
-        if TaskParticipation.objects.filter(
-            task=task, student=request.user,
-        ).exists():
-            raise DuplicateRequestError('You have already applied to this task.')
-
-        participation = TaskParticipation.objects.create(
-            task=task, student=request.user,
+        task = get_object_or_404(Task, pk=task_id, is_active=True)
+        participation = services.request_participation(
+            user=request.user, task=task,
         )
         return Response(
             {
@@ -251,53 +210,28 @@ class JoinTaskView(APIView):
 
 
 class VerifyTaskView(APIView):
-    """
-    POST /api/events/tasks/<id>/verify/
-    Student submits verification code → points awarded atomically.
-    """
+    """Student submits the task's verification code to claim their points."""
+
     permission_classes = [IsAuthenticated, IsStudent]
 
     def post(self, request, task_id):
         serializer = VerifyCodeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        code = serializer.validated_data['code']
+        task = get_object_or_404(Task, pk=task_id, is_active=True)
 
         try:
-            task = Task.objects.get(pk=task_id, is_active=True)
-        except Task.DoesNotExist:
+            services.complete_participation(
+                user=request.user,
+                task=task,
+                code=serializer.validated_data['code'],
+            )
+        except TaskParticipation.DoesNotExist:
             return Response(
-                {'error': 'Task not found.'},
-                status=status.HTTP_404_NOT_FOUND,
+                {'error': 'No approved participation found for this task.'},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if task.verification_code != code:
-            raise InvalidVerificationCodeError('Invalid verification code.')
-
-        with transaction.atomic():
-            try:
-                participation = (
-                    TaskParticipation.objects
-                    .select_for_update()
-                    .get(
-                        task=task,
-                        student=request.user,
-                        status=TaskParticipation.Status.APPROVED,
-                    )
-                )
-            except TaskParticipation.DoesNotExist:
-                return Response(
-                    {'error': 'No approved participation found for this task.'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            participation.status = TaskParticipation.Status.COMPLETED
-            participation.save()
-
-            User.objects.filter(pk=request.user.pk).update(
-                points=F('points') + task.points_reward,
-            )
-
-        request.user.refresh_from_db()
+        request.user.refresh_from_db(fields=['points'])
         return Response({
             'detail': f'Task completed! You earned {task.points_reward} points.',
             'points_earned': task.points_reward,
@@ -306,141 +240,81 @@ class VerifyTaskView(APIView):
 
 
 class MyParticipationsView(APIView):
-    """
-    GET /api/events/my-participations/
-    Student views their own task participations.
-    Supports ?status=pending/approved/rejected/completed filter.
-    """
+    """Student's own participation history, filterable by ``?status=``."""
+
     permission_classes = [IsAuthenticated, IsStudent]
 
     def get(self, request):
         participations = TaskParticipation.objects.filter(
             student=request.user,
         ).select_related('task', 'task__organization')
-
-        task_status = request.query_params.get('status')
-        if task_status:
-            participations = participations.filter(status=task_status)
-
-        paginator = PageNumberPagination()
-        paginator.page_size = 20
-        page = paginator.paginate_queryset(participations, request)
-        return paginator.get_paginated_response(
-            MyParticipationSerializer(page, many=True).data,
-        )
+        participations = apply_exact_filter(participations, request, 'status')
+        return paginate(participations, request, MyParticipationSerializer)
 
 
 # ─── Organization endpoints ───────────────────────────────────────
 
 
 class CreateTaskView(APIView):
-    """
-    POST /api/events/tasks/create/
-    Organization creates a new task.
-    Verification code is auto-generated.
-    """
+    """Organization owner creates a task under their own organization."""
+
     permission_classes = [IsAuthenticated, IsOrganization]
 
     def post(self, request):
-        org = _get_org_or_404(request.user)
-        if org is None:
-            return Response(
-                {'error': 'You do not have an organization assigned.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        org, error = _org_required(request.user)
+        if error is not None:
+            return error
         serializer = CreateTaskSerializer(
             data=request.data, context={'organization': org},
         )
         serializer.is_valid(raise_exception=True)
         task = serializer.save()
         return Response(
-            TaskOrgSerializer(task).data,
-            status=status.HTTP_201_CREATED,
+            TaskOrgSerializer(task).data, status=status.HTTP_201_CREATED,
         )
 
 
 class TaskRequestsView(APIView):
-    """
-    GET /api/events/tasks/<id>/requests/
-    Org views participation requests for their own task.
-    Supports ?status=pending/approved/rejected/completed filter.
-    """
+    """Participation requests for a task owned by the caller."""
+
     permission_classes = [IsAuthenticated, IsOrganization]
 
     def get(self, request, task_id):
-        try:
-            task = Task.objects.get(
-                pk=task_id, organization__owner=request.user,
-            )
-        except Task.DoesNotExist:
-            return Response(
-                {'error': 'Task not found.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
+        task = get_object_or_404(
+            Task, pk=task_id, organization__owner=request.user,
+        )
         participations = task.participations.select_related('student').all()
-
-        req_status = request.query_params.get('status')
-        if req_status:
-            participations = participations.filter(status=req_status)
-
+        participations = apply_exact_filter(participations, request, 'status')
         return Response(
             ParticipationRequestSerializer(participations, many=True).data,
         )
 
 
 class ManageRequestView(APIView):
-    """
-    PATCH /api/events/requests/<id>/
-    Org approves or rejects a participation request.
-    Request: { status: "approved" | "rejected" }
-    """
+    """Organization owner approves or rejects a participation request."""
+
     permission_classes = [IsAuthenticated, IsOrganization]
 
     def patch(self, request, participation_id):
-        try:
-            participation = (
-                TaskParticipation.objects
-                .select_related('task', 'task__organization')
-                .get(
-                    pk=participation_id,
-                    task__organization__owner=request.user,
-                )
-            )
-        except TaskParticipation.DoesNotExist:
-            return Response(
-                {'error': 'Participation request not found.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
+        participation = get_object_or_404(
+            TaskParticipation.objects.select_related(
+                'task', 'task__organization',
+            ),
+            pk=participation_id,
+            task__organization__owner=request.user,
+        )
         serializer = ApproveRejectSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        new_status = serializer.validated_data['status']
-
-        if not participation.can_transition_to(new_status):
-            raise InvalidStateTransitionError(
-                f"Cannot change status from '{participation.status}' to '{new_status}'."
-            )
-
-        if (
-            new_status == TaskParticipation.Status.APPROVED
-            and participation.task.is_full
-        ):
-            raise EventFullError(
-                'This task has reached the maximum number of participants.'
-            )
-
-        participation.status = new_status
-        participation.save()
-        return Response(ParticipationRequestSerializer(participation).data)
+        updated = services.decide_participation(
+            participation=participation,
+            new_status=serializer.validated_data['status'],
+        )
+        return Response(ParticipationRequestSerializer(updated).data)
 
 
 class StudentHistoryView(APIView):
-    """
-    GET /api/events/students/<id>/history/
-    Org views a student's task history (scoped to their org only).
-    Admin views all task history for a student.
-    """
+    """Admin sees the full history; org owners see their org's slice only."""
+
     permission_classes = [IsAuthenticated]
 
     def get(self, request, student_id):
@@ -450,27 +324,17 @@ class StudentHistoryView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        try:
-            student = User.objects.get(
-                pk=student_id, role=User.Role.STUDENT,
-            )
-        except User.DoesNotExist:
-            return Response(
-                {'error': 'Student not found.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
+        student = get_object_or_404(
+            User, pk=student_id, role=User.Role.STUDENT,
+        )
         participations = TaskParticipation.objects.filter(
             student=student,
         ).select_related('task', 'task__organization')
 
         if request.user.role == User.Role.ORGANIZATION:
-            org = _get_org_or_404(request.user)
-            if org is None:
-                return Response(
-                    {'error': 'You do not have an organization assigned.'},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+            org, error = _org_required(request.user)
+            if error is not None:
+                return error
             participations = participations.filter(task__organization=org)
 
         return Response(
@@ -482,24 +346,14 @@ class StudentHistoryView(APIView):
 
 
 class AdminTaskListView(APIView):
-    """
-    GET /api/events/admin/tasks/
-    Admin lists all tasks (including inactive).
-    Supports ?is_active=true/false and ?search=title filters.
-    """
+    """Admin-only paginated list of every task with optional filters."""
+
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get(self, request):
         tasks = Task.objects.select_related('organization').all()
-
-        is_active = request.query_params.get('is_active')
-        if is_active is not None:
-            tasks = tasks.filter(is_active=is_active.lower() == 'true')
-
-        search = request.query_params.get('search')
-        if search:
-            tasks = tasks.filter(title__icontains=search)
-
+        tasks = apply_bool_filter(tasks, request, 'is_active')
+        tasks = apply_search(tasks, request, ['title'])
         tasks = tasks.annotate(
             _approved_count=Count(
                 'participations',
@@ -509,30 +363,16 @@ class AdminTaskListView(APIView):
                 ]),
             ),
         )
-
-        paginator = PageNumberPagination()
-        paginator.page_size = 20
-        page = paginator.paginate_queryset(tasks, request)
-        return paginator.get_paginated_response(
-            TaskSerializer(page, many=True).data,
-        )
+        return paginate(tasks, request, TaskSerializer)
 
 
 class AdminDeactivateTaskView(APIView):
-    """
-    DELETE /api/events/admin/tasks/<id>/
-    Admin deactivates any task.
-    """
+    """Admin soft-deletes any task regardless of ownership."""
+
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def delete(self, request, task_id):
-        try:
-            task = Task.objects.get(pk=task_id)
-        except Task.DoesNotExist:
-            return Response(
-                {'error': 'Task not found.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        task = get_object_or_404(Task, pk=task_id)
         task.is_active = False
-        task.save()
+        task.save(update_fields=['is_active'])
         return Response({'detail': 'Task deactivated.'})
