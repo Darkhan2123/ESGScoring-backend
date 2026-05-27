@@ -10,7 +10,7 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
-            'id', 'email', 'full_name', 'student_id',
+            'id', 'email', 'full_name', 'student_id', 'school',
             'role', 'phone', 'avatar', 'points', 'created_at',
         ]
         read_only_fields = ['id', 'created_at']
@@ -23,6 +23,7 @@ class RegisterSerializer(serializers.Serializer):
     full_name = serializers.CharField()
     password = serializers.CharField(write_only=True, min_length=6)
     student_id = serializers.CharField()
+    school = serializers.ChoiceField(choices=User.School.choices)
 
     def validate_email(self, value):
         if User.objects.filter(email=value).exists():
@@ -41,6 +42,7 @@ class RegisterSerializer(serializers.Serializer):
             password=validated_data['password'],
             full_name=validated_data['full_name'],
             student_id=validated_data['student_id'],
+            school=validated_data['school'],
             role=User.Role.STUDENT,
         )
 
@@ -99,6 +101,9 @@ class AdminCreateUserSerializer(serializers.Serializer):
     role = serializers.ChoiceField(choices=User.Role.choices)
     student_id = serializers.CharField(required=False, default='')
     phone = serializers.CharField(required=False, default='')
+    school = serializers.ChoiceField(
+        choices=User.School.choices, required=False, allow_null=True,
+    )
 
     def validate_email(self, value):
         if User.objects.filter(email=value).exists():
@@ -119,6 +124,7 @@ class AdminCreateUserSerializer(serializers.Serializer):
             role=validated_data['role'],
             student_id=validated_data.get('student_id', ''),
             phone=validated_data.get('phone', ''),
+            school=validated_data.get('school'),
         )
 
 
@@ -127,7 +133,7 @@ class AdminUpdateUserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['role', 'is_active', 'points', 'full_name', 'phone', 'student_id']
+        fields = ['role', 'is_active', 'points', 'full_name', 'phone', 'student_id', 'school']
 
     def validate_role(self, value):
         if value not in dict(User.Role.choices):
