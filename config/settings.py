@@ -48,6 +48,8 @@ INSTALLED_APPS = [
     'apps.core',
     'apps.events',
     'apps.organizations',
+    'apps.projects',
+    'apps.quizzes',
     'apps.rewards',
     'apps.shop',
     'apps.users',
@@ -135,7 +137,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Asia/Almaty'
 
 USE_I18N = True
 
@@ -185,6 +187,10 @@ SPECTACULAR_SETTINGS = {
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
 }
+
+# ---------- Daily ESG quiz ----------
+QUIZ_TIME_LIMIT_SECONDS = 120
+QUIZ_BULK_MAX_ITEMS = 200
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
