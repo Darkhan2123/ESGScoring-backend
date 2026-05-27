@@ -4,12 +4,16 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework import status
 from .exceptions import (
+    AlreadySubmittedError,
+    DuplicateRequestError,
+    EventFullError,
     InsufficientPointsError,
+    InvalidQuizPayloadError,
     InvalidStateTransitionError,
     InvalidVerificationCodeError,
-    EventFullError,
-    DuplicateRequestError,
+    NoQuizScheduledError,
     ShopInactiveError,
+    TimeLimitExceededError,
 )
 
 DOMAIN_EXCEPTION_MAP = {
@@ -19,6 +23,10 @@ DOMAIN_EXCEPTION_MAP = {
     EventFullError: status.HTTP_409_CONFLICT,
     DuplicateRequestError: status.HTTP_409_CONFLICT,
     ShopInactiveError: status.HTTP_400_BAD_REQUEST,
+    NoQuizScheduledError: status.HTTP_400_BAD_REQUEST,
+    AlreadySubmittedError: status.HTTP_409_CONFLICT,
+    InvalidQuizPayloadError: status.HTTP_400_BAD_REQUEST,
+    TimeLimitExceededError: status.HTTP_409_CONFLICT,
 }
 
 
@@ -65,10 +73,11 @@ def custom_exception_handler(exc, context):
 
     for exc_class, status_code in DOMAIN_EXCEPTION_MAP.items():
         if isinstance(exc, exc_class):
-            return Response(
-                {'error': str(exc), 'error_code': exc.__class__.__name__},
-                status=status_code,
-            )
+            body = {'error': str(exc), 'error_code': exc.__class__.__name__}
+            extra_errors = getattr(exc, 'errors', None)
+            if extra_errors is not None:
+                body['errors'] = extra_errors
+            return Response(body, status=status_code)
 
     if isinstance(exc, IntegrityError):
         return Response(
