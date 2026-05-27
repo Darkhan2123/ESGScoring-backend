@@ -7,10 +7,15 @@ from .models import User
 class UserSerializer(serializers.ModelSerializer):
     """Full user output — returned after login/register and on GET /me/."""
 
+    school_display = serializers.CharField(
+        source='get_school_display', read_only=True,
+    )
+
     class Meta:
         model = User
         fields = [
-            'id', 'email', 'full_name', 'student_id', 'school',
+            'id', 'email', 'full_name', 'student_id',
+            'school', 'school_display',
             'role', 'phone', 'avatar', 'points', 'created_at',
         ]
         read_only_fields = ['id', 'created_at']
