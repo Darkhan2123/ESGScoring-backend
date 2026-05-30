@@ -145,7 +145,11 @@ class TaskDetailView(APIView):
         )
         serializer = UpdateTaskSerializer(task, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        return Response(TaskOrgSerializer(serializer.save()).data)
+        return Response(
+            TaskOrgSerializer(
+                serializer.save(), context={'request': request},
+            ).data,
+        )
 
     def delete(self, request, task_id):
         if request.user.role != User.Role.ORGANIZATION:
@@ -270,7 +274,8 @@ class CreateTaskView(APIView):
         serializer.is_valid(raise_exception=True)
         task = serializer.save()
         return Response(
-            TaskOrgSerializer(task).data, status=status.HTTP_201_CREATED,
+            TaskOrgSerializer(task, context={'request': request}).data,
+            status=status.HTTP_201_CREATED,
         )
 
 
@@ -363,7 +368,9 @@ class AdminTaskListView(APIView):
                 ]),
             ),
         )
-        return paginate(tasks, request, TaskSerializer)
+        return paginate(
+            tasks, request, TaskSerializer, context={'request': request},
+        )
 
 
 class AdminDeactivateTaskView(APIView):

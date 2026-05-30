@@ -19,15 +19,18 @@ from rest_framework.views import APIView
 from apps.core.filters import apply_bool_filter, apply_exact_filter, apply_search
 from apps.core.pagination import paginate
 from apps.organizations.models import Organization
-from apps.users.permissions import IsAdmin, IsOrganization
+from apps.users.permissions import IsAdmin, IsOrganization, IsStudent
 
+from . import services
 from .models import Project
 from .serializers import (
     AdminUpdateProjectSerializer,
     CreateProjectSerializer,
     ProjectListSerializer,
+    ProjectOwnerSerializer,
     ProjectSerializer,
     UpdateProjectSerializer,
+    VerifyCodeSerializer,
 )
 
 
@@ -69,7 +72,10 @@ class ProjectListView(APIView):
         )
         projects = apply_exact_filter(projects, request, 'organization')
         projects = apply_search(projects, request, ['title'])
-        return paginate(projects, request, ProjectListSerializer)
+        return paginate(
+            projects, request, ProjectListSerializer,
+            context={'request': request},
+        )
 
 
 class ProjectDetailView(APIView):
@@ -84,7 +90,9 @@ class ProjectDetailView(APIView):
             is_active=True,
             organization__is_active=True,
         )
-        return Response(ProjectSerializer(project).data)
+        return Response(
+            ProjectSerializer(project, context={'request': request}).data,
+        )
 
 
 # ─── Organization owner endpoints ──────────────────────────────────
@@ -106,7 +114,10 @@ class MyProjectsView(APIView):
         )
         projects = apply_bool_filter(projects, request, 'is_active')
         projects = apply_search(projects, request, ['title'])
-        return paginate(projects, request, ProjectListSerializer)
+        return paginate(
+            projects, request, ProjectOwnerSerializer,
+            context={'request': request},
+        )
 
     def post(self, request):
         org, error = _org_required(request.user)
@@ -118,7 +129,7 @@ class MyProjectsView(APIView):
         serializer.is_valid(raise_exception=True)
         project = serializer.save()
         return Response(
-            ProjectSerializer(project).data,
+            ProjectOwnerSerializer(project, context={'request': request}).data,
             status=status.HTTP_201_CREATED,
         )
 
@@ -136,7 +147,12 @@ class MyProjectDetailView(APIView):
         )
 
     def get(self, request, project_id):
-        return Response(ProjectSerializer(self._get(request, project_id)).data)
+        return Response(
+            ProjectOwnerSerializer(
+                self._get(request, project_id),
+                context={'request': request},
+            ).data,
+        )
 
     def patch(self, request, project_id):
         project = self._get(request, project_id)
@@ -144,7 +160,11 @@ class MyProjectDetailView(APIView):
             project, data=request.data, partial=True,
         )
         serializer.is_valid(raise_exception=True)
-        return Response(ProjectSerializer(serializer.save()).data)
+        return Response(
+            ProjectOwnerSerializer(
+                serializer.save(), context={'request': request},
+            ).data,
+        )
 
     def delete(self, request, project_id):
         project = self._get(request, project_id)
@@ -166,7 +186,10 @@ class AdminProjectListView(APIView):
         projects = apply_bool_filter(projects, request, 'is_active')
         projects = apply_exact_filter(projects, request, 'organization')
         projects = apply_search(projects, request, ['title'])
-        return paginate(projects, request, ProjectSerializer)
+        return paginate(
+            projects, request, ProjectOwnerSerializer,
+            context={'request': request},
+        )
 
 
 class AdminProjectDetailView(APIView):
@@ -180,7 +203,11 @@ class AdminProjectDetailView(APIView):
         )
 
     def get(self, request, project_id):
-        return Response(ProjectSerializer(self._get(project_id)).data)
+        return Response(
+            ProjectOwnerSerializer(
+                self._get(project_id), context={'request': request},
+            ).data,
+        )
 
     def patch(self, request, project_id):
         project = self._get(project_id)
@@ -188,10 +215,41 @@ class AdminProjectDetailView(APIView):
             project, data=request.data, partial=True,
         )
         serializer.is_valid(raise_exception=True)
-        return Response(ProjectSerializer(serializer.save()).data)
+        return Response(
+            ProjectOwnerSerializer(
+                serializer.save(), context={'request': request},
+            ).data,
+        )
 
     def delete(self, request, project_id):
         project = self._get(project_id)
         project.is_active = False
         project.save(update_fields=['is_active'])
         return Response({'detail': 'Project deactivated.'})
+
+
+# ─── Student endpoint ──────────────────────────────────────────────
+
+
+class ProjectVerifyView(APIView):
+    """Student submits a project's verification code to claim its points."""
+
+    permission_classes = [IsAuthenticated, IsStudent]
+
+    def post(self, request, project_id):
+        serializer = VerifyCodeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        project = get_object_or_404(Project, pk=project_id, is_active=True)
+
+        services.claim_project_points(
+            user=request.user,
+            project=project,
+            code=serializer.validated_data['code'],
+        )
+
+        request.user.refresh_from_db(fields=['points'])
+        return Response({
+            'detail': f'Project completed! You earned {project.points_reward} points.',
+            'points_earned': project.points_reward,
+            'total_points': request.user.points,
+        })

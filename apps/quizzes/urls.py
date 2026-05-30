@@ -2,8 +2,7 @@ from django.urls import path
 
 from .views import (
     DailyQuizAttemptsView,
-    DailyQuizDetailView,
-    DailyQuizListCreateView,
+    DailyQuizListView,
     MyAttemptsView,
     QuestionBulkCreateView,
     QuestionDetailView,
@@ -20,8 +19,8 @@ urlpatterns = [
     path('questions/bulk/', QuestionBulkCreateView.as_view(), name='quiz_question_bulk'),
     path('questions/<int:pk>/', QuestionDetailView.as_view(), name='quiz_question_detail'),
 
-    path('daily/', DailyQuizListCreateView.as_view(), name='daily_quiz_list'),
-    path('daily/<int:pk>/', DailyQuizDetailView.as_view(), name='daily_quiz_detail'),
+    # Daily-quiz analytics only (no manual scheduling)
+    path('daily/', DailyQuizListView.as_view(), name='daily_quiz_list'),
     path('daily/<int:pk>/attempts/', DailyQuizAttemptsView.as_view(), name='daily_quiz_attempts'),
 
     # Student

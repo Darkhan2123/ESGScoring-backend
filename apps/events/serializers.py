@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from apps.core.serializers import resolve_image
 from apps.users.models import User
 from .models import Task, TaskParticipation
 
@@ -13,16 +14,20 @@ class TaskListSerializer(serializers.ModelSerializer):
     organization_name = serializers.CharField(
         source='organization.name', read_only=True,
     )
+    image = serializers.SerializerMethodField()
     participants_count = serializers.SerializerMethodField()
     registration_status = serializers.SerializerMethodField()
 
     class Meta:
         model = Task
         fields = [
-            'id', 'title', 'description', 'organization_name',
+            'id', 'title', 'description', 'organization_name', 'image',
             'points_reward', 'max_participants', 'participants_count',
             'registration_status', 'location', 'event_datetime', 'created_at',
         ]
+
+    def get_image(self, obj):
+        return resolve_image(obj, self.context.get('request'))
 
     def get_participants_count(self, obj):
         return obj.approved_count
@@ -46,6 +51,7 @@ class TaskSerializer(serializers.ModelSerializer):
     organization_id = serializers.IntegerField(
         source='organization.id', read_only=True,
     )
+    image = serializers.SerializerMethodField()
     participants_count = serializers.SerializerMethodField()
     is_full = serializers.BooleanField(read_only=True)
     registration_status = serializers.SerializerMethodField()
@@ -54,10 +60,13 @@ class TaskSerializer(serializers.ModelSerializer):
         model = Task
         fields = [
             'id', 'title', 'description', 'organization_id',
-            'organization_name', 'points_reward', 'max_participants',
+            'organization_name', 'image', 'points_reward', 'max_participants',
             'participants_count', 'is_full', 'registration_status', 'location', 'event_datetime', 'is_active',
             'created_at', 'updated_at',
         ]
+
+    def get_image(self, obj):
+        return resolve_image(obj, self.context.get('request'))
 
     def get_participants_count(self, obj):
         return obj.approved_count
@@ -90,6 +99,7 @@ class CreateTaskSerializer(serializers.Serializer):
     )
     location = serializers.CharField(max_length=255, required=False, default='')
     event_datetime = serializers.DateTimeField(required=False, default=None)
+    image = serializers.ImageField(required=False, allow_null=True, default=None)
 
     def create(self, validated_data):
         organization = self.context['organization']
@@ -101,6 +111,7 @@ class CreateTaskSerializer(serializers.Serializer):
             max_participants=validated_data.get('max_participants'),
             location=validated_data.get('location', ''),
             event_datetime=validated_data.get('event_datetime'),
+            image=validated_data.get('image'),
         )
 
 
@@ -109,7 +120,7 @@ class UpdateTaskSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Task
-        fields = ['title', 'description', 'max_participants', 'location', 'event_datetime', 'is_active']
+        fields = ['title', 'description', 'image', 'max_participants', 'location', 'event_datetime', 'is_active']
 
 
 # ─── Participation serializers ─────────────────────────────────────

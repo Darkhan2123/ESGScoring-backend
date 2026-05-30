@@ -14,6 +14,7 @@ class Task(models.Model):
         related_name='tasks',
     )
     points_reward = models.PositiveIntegerField()
+    image = models.ImageField(upload_to='events/', null=True, blank=True)
     verification_code = models.CharField(max_length=8, unique=True)
     max_participants = models.PositiveIntegerField(null=True, blank=True)
     location = models.CharField(max_length=255, blank=True)

@@ -7,6 +7,7 @@ from .views import (
     MyProjectsView,
     ProjectDetailView,
     ProjectListView,
+    ProjectVerifyView,
 )
 
 urlpatterns = [
@@ -14,6 +15,10 @@ urlpatterns = [
     path('', ProjectListView.as_view(), name='project_list'),
     path('my/', MyProjectsView.as_view(), name='my_projects'),
     path('my/<int:project_id>/', MyProjectDetailView.as_view(), name='my_project_detail'),
+
+    # Student claims points with the org-provided code
+    path('<int:project_id>/verify/', ProjectVerifyView.as_view(), name='project_verify'),
+
     path('<int:project_id>/', ProjectDetailView.as_view(), name='project_detail'),
 
     # Admin only

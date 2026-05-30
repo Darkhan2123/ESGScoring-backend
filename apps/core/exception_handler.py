@@ -12,6 +12,7 @@ from .exceptions import (
     InvalidStateTransitionError,
     InvalidVerificationCodeError,
     NoQuizScheduledError,
+    PoolExhaustedError,
     ShopInactiveError,
     TimeLimitExceededError,
 )
@@ -27,6 +28,7 @@ DOMAIN_EXCEPTION_MAP = {
     AlreadySubmittedError: status.HTTP_409_CONFLICT,
     InvalidQuizPayloadError: status.HTTP_400_BAD_REQUEST,
     TimeLimitExceededError: status.HTTP_409_CONFLICT,
+    PoolExhaustedError: status.HTTP_400_BAD_REQUEST,
 }
 
 

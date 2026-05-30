@@ -1,8 +1,8 @@
 from django.contrib import admin
 
 from .models import (
+    AttemptQuestion,
     DailyQuiz,
-    DailyQuizQuestion,
     Question,
     QuizAnswer,
     QuizAttempt,
@@ -11,25 +11,25 @@ from .models import (
 
 @admin.register(Question)
 class QuestionAdmin(admin.ModelAdmin):
-    list_display = ['id', 'text', 'correct_index', 'created_by', 'is_active', 'created_at']
-    list_filter = ['is_active', 'created_by']
+    list_display = [
+        'id', 'text', 'question_type', 'answer', 'correct_index',
+        'created_by', 'is_active', 'created_at',
+    ]
+    list_filter = ['question_type', 'is_active', 'created_by']
     search_fields = ['text']
     raw_id_fields = ['created_by']
 
 
-class DailyQuizQuestionInline(admin.TabularInline):
-    model = DailyQuizQuestion
-    extra = 0
-    raw_id_fields = ['question']
-
-
 @admin.register(DailyQuiz)
 class DailyQuizAdmin(admin.ModelAdmin):
-    list_display = ['id', 'date', 'created_by', 'is_published', 'created_at']
-    list_filter = ['is_published', 'created_by']
+    list_display = ['id', 'date', 'created_at']
     search_fields = ['date']
-    raw_id_fields = ['created_by']
-    inlines = [DailyQuizQuestionInline]
+
+
+class AttemptQuestionInline(admin.TabularInline):
+    model = AttemptQuestion
+    extra = 0
+    raw_id_fields = ['question']
 
 
 @admin.register(QuizAttempt)
@@ -43,10 +43,14 @@ class QuizAttemptAdmin(admin.ModelAdmin):
     search_fields = ['user__full_name', 'user__email']
     raw_id_fields = ['user', 'daily_quiz']
     readonly_fields = ['started_at', 'deadline_at']
+    inlines = [AttemptQuestionInline]
 
 
 @admin.register(QuizAnswer)
 class QuizAnswerAdmin(admin.ModelAdmin):
-    list_display = ['id', 'attempt', 'question', 'selected_index', 'is_correct']
+    list_display = [
+        'id', 'attempt', 'question',
+        'selected_index', 'selected_bool', 'is_correct',
+    ]
     list_filter = ['is_correct']
     raw_id_fields = ['attempt', 'question']

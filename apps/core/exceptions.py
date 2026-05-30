@@ -42,3 +42,8 @@ class InvalidQuizPayloadError(DomainException):
 
 class TimeLimitExceededError(DomainException):
     pass
+
+
+class PoolExhaustedError(DomainException):
+    """The student has answered every active question available to them."""
+    pass

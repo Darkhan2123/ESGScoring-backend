@@ -1,26 +1,23 @@
 """
-Use-case layer for the daily ESG quiz.
+Use-case layer for the daily ESG quiz (v2).
 
-Mirrors :mod:`apps.events.services` — views are thin, every mutation lives
-here, and every entry point that touches points or the per-day attempt row
-runs inside :func:`django.db.transaction.atomic` with
-:meth:`~django.db.models.query.QuerySet.select_for_update` locks where
-multiple callers could race.
-
-Anti-cheat invariants:
-
-* Exactly one :class:`~apps.quizzes.models.QuizAttempt` row per
-  ``(user, daily_quiz)`` — enforced by the DB unique constraint and created
-  on ``/today/start/`` so backgrounding the app cannot earn a retry.
-* ``deadline_at`` is server-set; late submits flip the attempt to
-  :attr:`~apps.quizzes.models.QuizAttempt.Status.EXPIRED`.
-* Scoring is server-computed from ``correct_index``, which never leaves
-  the server before the student locks their answers in.
+Differences from v1:
+  * No manual daily curation. ``DailyQuiz`` rows are created lazily by
+    ``start_daily_quiz`` on the first student call of the day.
+  * Questions are picked per-student at start time, drawn uniformly at
+    random from the active question pool (repeats across days allowed).
+  * Each attempt owns its 3 served questions via :class:`AttemptQuestion`,
+    so two students playing on the same day get independently-randomised
+    question sets (and the submit endpoint validates against the attempt's
+    served set, not against a shared DailyQuiz pin).
+  * Questions come in two shapes (True/False and Multiple-choice); the
+    bulk upload accepts both and the per-row validator infers the shape
+    from the row's keys.
 """
 from __future__ import annotations
 
+import random
 from datetime import date, datetime, timedelta
-from typing import Iterable
 
 from django.conf import settings
 from django.db import transaction
@@ -31,13 +28,14 @@ from apps.core.exceptions import (
     AlreadySubmittedError,
     InvalidQuizPayloadError,
     NoQuizScheduledError,
+    PoolExhaustedError,
     TimeLimitExceededError,
 )
 from apps.users.models import User
 
 from .models import (
+    AttemptQuestion,
     DailyQuiz,
-    DailyQuizQuestion,
     Question,
     QuizAnswer,
     QuizAttempt,
@@ -46,6 +44,10 @@ from .models import (
 
 SUBMIT_BASE_POINTS = 15
 POINTS_PER_CORRECT = 5
+QUESTIONS_PER_QUIZ = 3
+
+
+# --- Helpers ---------------------------------------------------------------
 
 
 def local_today() -> date:
@@ -65,58 +67,104 @@ def _resolve_organization(user: User):
     """Return the user's organization or ``None`` for admins.
 
     Org users always operate inside their own pool; admins act on the whole
-    catalogue (``organization=None`` means "no scope restriction").
+    catalogue (``organization=None`` means "no scope restriction"). Raises
+    :class:`InvalidQuizPayloadError` for org-role users with no organization.
     """
     if user.role == User.Role.ADMIN:
         return None
     try:
         return user.organization
-    except Exception:  # noqa: BLE001 — OneToOne reverse raises DoesNotExist
+    except Exception:  # noqa: BLE001 -- OneToOne reverse raises DoesNotExist
         raise InvalidQuizPayloadError(
             'You do not have an organization assigned.',
         )
 
 
-# ─── Question pool ─────────────────────────────────────────────────
+# --- Question pool (manager) -----------------------------------------------
 
 
-def _validate_question_item(item: dict, index: int) -> list[dict]:
-    """Return a list of per-row errors for a single bulk-upload row."""
+_TF = Question.QuestionType.TRUE_FALSE
+_MC = Question.QuestionType.MULTIPLE_CHOICE
+
+
+def _validate_question_item(item: dict, index: int) -> tuple[list[dict], str | None]:
+    """Validate one bulk-upload row.
+
+    Returns ``(errors, question_type)``. The shape is inferred from the
+    presence of ``answer`` (T/F) or ``options`` (MC).
+    """
     errors: list[dict] = []
 
     text = item.get('text')
     if not isinstance(text, str) or not text.strip():
-        errors.append({'index': index, 'field': 'text', 'detail': 'Must be a non-empty string.'})
+        errors.append({
+            'index': index, 'field': 'text',
+            'detail': 'Must be a non-empty string.',
+        })
 
+    explanation = item.get('explanation', '')
+    if explanation is not None and not isinstance(explanation, str):
+        errors.append({
+            'index': index, 'field': 'explanation',
+            'detail': 'Must be a string.',
+        })
+
+    has_answer = 'answer' in item
+    has_options = 'options' in item or 'correct_index' in item
+
+    if has_answer and has_options:
+        errors.append({
+            'index': index, 'field': 'shape',
+            'detail': 'Provide either {answer} (True/False) or {options + correct_index} (MC), not both.',
+        })
+        return errors, None
+    if not has_answer and not has_options:
+        errors.append({
+            'index': index, 'field': 'shape',
+            'detail': 'Provide either "answer" (True/False) or "options" + "correct_index" (MC).',
+        })
+        return errors, None
+
+    if has_answer:
+        if not isinstance(item.get('answer'), bool):
+            errors.append({
+                'index': index, 'field': 'answer',
+                'detail': 'Must be true or false.',
+            })
+        return errors, _TF
+
+    # has_options
     options = item.get('options')
     if not isinstance(options, list) or len(options) != 4:
-        errors.append({'index': index, 'field': 'options', 'detail': 'Must be a list of 4 strings.'})
+        errors.append({
+            'index': index, 'field': 'options',
+            'detail': 'Must be a list of 4 strings.',
+        })
     else:
         for i, opt in enumerate(options):
             if not isinstance(opt, str) or not opt.strip():
                 errors.append({
-                    'index': index,
-                    'field': f'options[{i}]',
+                    'index': index, 'field': f'options[{i}]',
                     'detail': 'Must be a non-empty string.',
                 })
 
-    correct_index = item.get('correct_index')
-    if not isinstance(correct_index, int) or correct_index not in (0, 1, 2, 3):
+    ci = item.get('correct_index')
+    if not isinstance(ci, int) or ci not in (0, 1, 2, 3):
         errors.append({
-            'index': index,
-            'field': 'correct_index',
+            'index': index, 'field': 'correct_index',
             'detail': 'Must be one of 0, 1, 2, 3.',
         })
 
-    return errors
+    return errors, _MC
 
 
 @transaction.atomic
 def bulk_create_questions(*, user: User, items: list[dict]) -> tuple[int, list[int]]:
     """Create many :class:`Question` rows atomically.
 
-    Raises :class:`InvalidQuizPayloadError` with a per-row ``errors`` list if
-    any row fails validation; no rows are inserted in that case.
+    Accepts a mix of True/False and Multiple-choice rows. Raises
+    :class:`InvalidQuizPayloadError` with a per-row ``errors`` list if any
+    row fails validation; no rows are inserted in that case.
     """
     if not isinstance(items, list) or not items:
         raise InvalidQuizPayloadError('No questions provided.')
@@ -130,29 +178,57 @@ def bulk_create_questions(*, user: User, items: list[dict]) -> tuple[int, list[i
     organization = _resolve_organization(user)
 
     all_errors: list[dict] = []
+    typed_items: list[tuple[dict, str]] = []
     for i, item in enumerate(items):
-        all_errors.extend(_validate_question_item(item, i))
+        if not isinstance(item, dict):
+            all_errors.append({
+                'index': i, 'field': 'row',
+                'detail': 'Each row must be a JSON object.',
+            })
+            continue
+        row_errors, qtype = _validate_question_item(item, i)
+        all_errors.extend(row_errors)
+        if qtype is not None and not row_errors:
+            typed_items.append((item, qtype))
 
     if all_errors:
         raise InvalidQuizPayloadError(
             'Some questions failed validation.', errors=all_errors,
         )
 
-    rows = [
-        Question(
-            text=item['text'].strip(),
-            options=[opt.strip() for opt in item['options']],
-            correct_index=item['correct_index'],
-            created_by=organization,
-        )
-        for item in items
-    ]
+    rows: list[Question] = []
+    for item, qtype in typed_items:
+        explanation = (item.get('explanation') or '').strip()
+        if qtype == _TF:
+            rows.append(Question(
+                text=item['text'].strip(),
+                question_type=_TF,
+                answer=bool(item['answer']),
+                options=None,
+                correct_index=None,
+                explanation=explanation,
+                created_by=organization,
+            ))
+        else:  # MC
+            rows.append(Question(
+                text=item['text'].strip(),
+                question_type=_MC,
+                answer=None,
+                options=[opt.strip() for opt in item['options']],
+                correct_index=item['correct_index'],
+                explanation=explanation,
+                created_by=organization,
+            ))
+
     created = Question.objects.bulk_create(rows)
     return len(created), [q.pk for q in created]
 
 
-def _question_pool_for(user: User):
-    """Scope helper: org users see only their own pool, admins see all."""
+# --- Pool scoping ----------------------------------------------------------
+
+
+def question_pool_for_manager(user: User):
+    """Curation-side scope: org users see their own pool, admins see all."""
     qs = Question.objects.all()
     if user.role == User.Role.ADMIN:
         return qs
@@ -160,150 +236,97 @@ def _question_pool_for(user: User):
     return qs.filter(created_by=organization)
 
 
-def _fetch_questions_for_quiz(*, user: User, question_ids: list[int]) -> list[Question]:
-    """Return the 3 requested questions, in the supplied order.
+def _active_pool_ids() -> list[int]:
+    """Return ids of all active questions available to draw from.
 
-    Raises :class:`InvalidQuizPayloadError` if any id is missing from the
-    caller-scoped pool or inactive.
-    """
-    pool = _question_pool_for(user).filter(is_active=True, pk__in=question_ids)
-    found = {q.pk: q for q in pool}
-    missing = [qid for qid in question_ids if qid not in found]
-    if missing:
-        raise InvalidQuizPayloadError(
-            f'Unknown or unavailable question ids: {missing}.',
-        )
-    return [found[qid] for qid in question_ids]
-
-
-# ─── Daily quiz curation ───────────────────────────────────────────
-
-
-@transaction.atomic
-def create_daily_quiz(*, user: User, quiz_date: date, question_ids: list[int]) -> DailyQuiz:
-    """Schedule the daily quiz for ``quiz_date`` with three ordered questions."""
-    if len(question_ids) != 3 or len(set(question_ids)) != 3:
-        raise InvalidQuizPayloadError(
-            'Provide exactly three distinct question ids.',
-        )
-
-    questions = _fetch_questions_for_quiz(user=user, question_ids=question_ids)
-    organization = _resolve_organization(user)
-
-    quiz = DailyQuiz.objects.create(date=quiz_date, created_by=organization)
-    DailyQuizQuestion.objects.bulk_create([
-        DailyQuizQuestion(daily_quiz=quiz, question=q, position=i + 1)
-        for i, q in enumerate(questions)
-    ])
-    return quiz
-
-
-@transaction.atomic
-def update_daily_quiz(
-    *,
-    user: User,
-    quiz: DailyQuiz,
-    is_published: bool | None = None,
-    question_ids: list[int] | None = None,
-) -> DailyQuiz:
-    """Patch an existing daily quiz.
-
-    Refused once a student has started an attempt — late edits would change
-    what was already locked in.
-    """
-    if quiz.attempts.exists():
-        raise AlreadySubmittedError(
-            'Cannot edit a daily quiz once students have begun an attempt.',
-        )
-
-    changed = False
-    if is_published is not None:
-        quiz.is_published = is_published
-        changed = True
-
-    if question_ids is not None:
-        if len(question_ids) != 3 or len(set(question_ids)) != 3:
-            raise InvalidQuizPayloadError(
-                'Provide exactly three distinct question ids.',
-            )
-        questions = _fetch_questions_for_quiz(user=user, question_ids=question_ids)
-        quiz.quiz_questions.all().delete()
-        DailyQuizQuestion.objects.bulk_create([
-            DailyQuizQuestion(daily_quiz=quiz, question=q, position=i + 1)
-            for i, q in enumerate(questions)
-        ])
-        changed = True
-
-    if changed:
-        quiz.save(update_fields=['is_published', 'updated_at'])
-    return quiz
-
-
-# ─── Attempt lifecycle ─────────────────────────────────────────────
-
-
-def _get_today_quiz_locked() -> DailyQuiz | None:
-    """Return today's published quiz (no lock — read-only helper)."""
-    return (
-        DailyQuiz.objects
-        .filter(date=local_today(), is_published=True)
-        .first()
-    )
-
-
-def get_today_quiz_for_student(user: User) -> tuple[DailyQuiz | None, QuizAttempt | None]:
-    """Read-only status used by ``/today/`` — never creates an attempt."""
-    quiz = (
-        DailyQuiz.objects
-        .filter(date=local_today(), is_published=True)
-        .prefetch_related('quiz_questions__question')
-        .first()
-    )
-    if quiz is None:
-        return None, None
-    attempt = (
-        QuizAttempt.objects
-        .filter(user=user, daily_quiz=quiz)
-        .first()
-    )
-    return quiz, attempt
-
-
-def ordered_questions(quiz: DailyQuiz) -> list[DailyQuizQuestion]:
-    """Return the through rows for ``quiz`` ordered by ``position``.
-
-    Returned objects expose ``question`` already loaded so the serializer
-    can read text + options without N+1.
+    Selection is drawn uniformly at random from this pool; a student may be
+    served a question they have seen on a previous day (repeats allowed).
     """
     return list(
-        quiz.quiz_questions.select_related('question').order_by('position'),
+        Question.objects
+        .filter(is_active=True)
+        .values_list('pk', flat=True)
     )
+
+
+# --- Attempt lifecycle -----------------------------------------------------
+
+
+def _get_or_create_today_quiz_locked() -> DailyQuiz:
+    """Return today's :class:`DailyQuiz`, creating it if missing.
+
+    Called from inside ``start_daily_quiz``'s atomic block; the unique
+    constraint on ``date`` makes the race safe even without a row-level
+    lock on the table.
+    """
+    today = local_today()
+    quiz, _ = DailyQuiz.objects.get_or_create(date=today)
+    return quiz
+
+
+def get_today_status_for_student(user: User) -> dict:
+    """Read-only payload for ``/today/``.
+
+    Reports whether the student CAN play today: there must be at least
+    3 active questions in the pool, OR a still-in-progress attempt that was
+    already created earlier in the day.
+    """
+    today = local_today()
+    quiz = DailyQuiz.objects.filter(date=today).first()
+    attempt = None
+    if quiz is not None:
+        attempt = QuizAttempt.objects.filter(user=user, daily_quiz=quiz).first()
+
+    if attempt is not None:
+        # The student already has an attempt today -- always available
+        # (whether it's in-progress, submitted, forfeited, or expired).
+        return {
+            'available': True,
+            'daily_quiz_id': quiz.pk,
+            'date': today.isoformat(),
+            'attempt': attempt,
+            'reason': None,
+        }
+
+    pool_count = Question.objects.filter(is_active=True).count()
+    if pool_count < QUESTIONS_PER_QUIZ:
+        return {
+            'available': False,
+            'daily_quiz_id': None,
+            'date': today.isoformat(),
+            'attempt': None,
+            'reason': 'pool_exhausted',
+        }
+
+    return {
+        'available': True,
+        'daily_quiz_id': quiz.pk if quiz else None,
+        'date': today.isoformat(),
+        'attempt': None,
+        'reason': None,
+    }
 
 
 def start_daily_quiz(
     *, user: User,
-) -> tuple[QuizAttempt, DailyQuiz, list[DailyQuizQuestion], datetime]:
+) -> tuple[QuizAttempt, DailyQuiz, list[AttemptQuestion], datetime]:
     """Create-or-resume today's attempt for ``user``.
 
-    Returns ``(attempt, daily_quiz, ordered_questions, server_now)``.
+    Returns ``(attempt, daily_quiz, served_questions, server_now)``.
 
     Raises:
-        NoQuizScheduledError: nothing published for today.
         AlreadySubmittedError: the day is locked (submitted, forfeited, or
-            expired).
+            already-expired attempt exists).
+        PoolExhaustedError: the active question pool has fewer than 3
+            questions in total.
     """
-    quiz = _get_today_quiz_locked()
-    if quiz is None:
-        raise NoQuizScheduledError('No quiz is scheduled for today.')
-
-    # The atomic block needs to *commit* an EXPIRED transition even when we
-    # ultimately raise — so we record the intended exception, exit the block
-    # cleanly (commit), and then raise outside it.
     deferred_error: Exception | None = None
     attempt: QuizAttempt | None = None
     server_now = timezone.now()
 
     with transaction.atomic():
+        quiz = _get_or_create_today_quiz_locked()
+
         existing = (
             QuizAttempt.objects
             .select_for_update()
@@ -320,7 +343,7 @@ def start_daily_quiz(
                 deferred_error = AlreadySubmittedError(
                     'You have already played today.',
                 )
-            elif existing.status == QuizAttempt.Status.IN_PROGRESS:
+            else:  # IN_PROGRESS
                 now = timezone.now()
                 if now < existing.deadline_at:
                     attempt = existing
@@ -333,19 +356,49 @@ def start_daily_quiz(
                         'You have already played today.',
                     )
         else:
-            now = timezone.now()
-            attempt = QuizAttempt.objects.create(
-                user=user,
-                daily_quiz=quiz,
-                status=QuizAttempt.Status.IN_PROGRESS,
-                deadline_at=now + timedelta(seconds=_time_limit_seconds()),
-            )
-            server_now = now
+            pool_ids = _active_pool_ids()
+            if len(pool_ids) < QUESTIONS_PER_QUIZ:
+                deferred_error = PoolExhaustedError(
+                    'Not enough questions available right now.',
+                )
+            else:
+                picks = random.sample(pool_ids, QUESTIONS_PER_QUIZ)
+                now = timezone.now()
+                attempt = QuizAttempt.objects.create(
+                    user=user,
+                    daily_quiz=quiz,
+                    status=QuizAttempt.Status.IN_PROGRESS,
+                    deadline_at=now + timedelta(seconds=_time_limit_seconds()),
+                )
+                AttemptQuestion.objects.bulk_create([
+                    AttemptQuestion(
+                        attempt=attempt,
+                        question_id=pid,
+                        position=i + 1,
+                    )
+                    for i, pid in enumerate(picks)
+                ])
+                server_now = now
 
     if deferred_error is not None:
         raise deferred_error
 
-    return attempt, quiz, ordered_questions(quiz), server_now
+    served = list(
+        AttemptQuestion.objects
+        .filter(attempt=attempt)
+        .select_related('question')
+        .order_by('position')
+    )
+    return attempt, attempt.daily_quiz, served, server_now
+
+
+def served_questions(attempt: QuizAttempt) -> list[AttemptQuestion]:
+    """Return the 3 :class:`AttemptQuestion` rows for ``attempt``, ordered."""
+    return list(
+        attempt.served_questions
+        .select_related('question')
+        .order_by('position')
+    )
 
 
 def submit_daily_quiz(
@@ -353,22 +406,24 @@ def submit_daily_quiz(
 ) -> tuple[QuizAttempt, list[QuizAnswer], int]:
     """Score and lock the student's attempt for today.
 
-    ``answers`` is ``[{question_id, selected_index}, ...]``. Server-side
-    scoring guarantees the client cannot inflate points: only the chosen
-    index is trusted.
+    ``answers`` is ``[{question_id, selected_index|selected_bool}, ...]``.
+    The shape per row must match the question's ``question_type``. Server-
+    side scoring guarantees the client cannot inflate points.
 
     Raises:
         NoQuizScheduledError: no quiz today, or the student never started one.
         AlreadySubmittedError: this attempt is already terminal.
         TimeLimitExceededError: ``deadline_at`` has passed.
-        InvalidQuizPayloadError: answers don't match today's question set.
+        InvalidQuizPayloadError: answers don't match the served set, or the
+            answer shape mismatches the question type.
     """
-    quiz = _get_today_quiz_locked()
+    today = local_today()
+    quiz = DailyQuiz.objects.filter(date=today).first()
     if quiz is None:
-        raise NoQuizScheduledError('No quiz is scheduled for today.')
+        raise NoQuizScheduledError(
+            'Start the quiz before submitting answers.',
+        )
 
-    # Collect a deferred exception so the EXPIRED transition still commits
-    # before we raise. We exit the atomic block normally on every path.
     deferred_error: Exception | None = None
     result: tuple[QuizAttempt, list[QuizAnswer], int] | None = None
 
@@ -400,61 +455,92 @@ def submit_daily_quiz(
                     'Time limit exceeded. Attempt forfeited.',
                 )
             else:
-                today_question_ids = set(
-                    quiz.quiz_questions.values_list('question_id', flat=True),
+                served_qs = list(
+                    attempt.served_questions.select_related('question')
                 )
+                served_ids = {aq.question_id for aq in served_qs}
                 submitted_ids = [a['question_id'] for a in answers]
+
                 if (
-                    len(submitted_ids) != 3
-                    or set(submitted_ids) != today_question_ids
+                    len(submitted_ids) != QUESTIONS_PER_QUIZ
+                    or set(submitted_ids) != served_ids
                 ):
                     deferred_error = InvalidQuizPayloadError(
-                        "Answers must match exactly the 3 questions of today's quiz.",
+                        'Answers must match exactly the 3 questions you were served.',
                     )
                 else:
-                    questions = {
-                        q.pk: q
-                        for q in Question.objects.filter(pk__in=today_question_ids)
+                    questions_by_id = {
+                        aq.question.pk: aq.question for aq in served_qs
                     }
                     correct_count = 0
                     answer_rows: list[QuizAnswer] = []
+                    shape_error = False
+
                     for a in answers:
-                        q = questions[a['question_id']]
-                        is_correct = (a['selected_index'] == q.correct_index)
+                        q = questions_by_id[a['question_id']]
+                        si = a.get('selected_index')
+                        sb = a.get('selected_bool')
+
+                        if q.question_type == _TF:
+                            if sb is None:
+                                shape_error = True
+                                break
+                            is_correct = (sb == q.answer)
+                            answer_rows.append(QuizAnswer(
+                                attempt=attempt,
+                                question=q,
+                                selected_index=None,
+                                selected_bool=sb,
+                                is_correct=is_correct,
+                            ))
+                        else:  # MC
+                            if si is None:
+                                shape_error = True
+                                break
+                            is_correct = (si == q.correct_index)
+                            answer_rows.append(QuizAnswer(
+                                attempt=attempt,
+                                question=q,
+                                selected_index=si,
+                                selected_bool=None,
+                                is_correct=is_correct,
+                            ))
+
                         if is_correct:
                             correct_count += 1
-                        answer_rows.append(QuizAnswer(
-                            attempt=attempt,
-                            question=q,
-                            selected_index=a['selected_index'],
-                            is_correct=is_correct,
-                        ))
 
-                    points_awarded = (
-                        SUBMIT_BASE_POINTS + POINTS_PER_CORRECT * correct_count
-                    )
+                    if shape_error:
+                        deferred_error = InvalidQuizPayloadError(
+                            'Answer shape does not match the question type.',
+                        )
+                    else:
+                        points_awarded = (
+                            SUBMIT_BASE_POINTS
+                            + POINTS_PER_CORRECT * correct_count
+                        )
 
-                    QuizAnswer.objects.bulk_create(answer_rows)
+                        QuizAnswer.objects.bulk_create(answer_rows)
 
-                    attempt.status = QuizAttempt.Status.SUBMITTED
-                    attempt.correct_count = correct_count
-                    attempt.points_awarded = points_awarded
-                    attempt.submitted_at = now
-                    attempt.save(update_fields=[
-                        'status', 'correct_count', 'points_awarded', 'submitted_at',
-                    ])
+                        attempt.status = QuizAttempt.Status.SUBMITTED
+                        attempt.correct_count = correct_count
+                        attempt.points_awarded = points_awarded
+                        attempt.submitted_at = now
+                        attempt.save(update_fields=[
+                            'status', 'correct_count',
+                            'points_awarded', 'submitted_at',
+                        ])
 
-                    User.objects.filter(pk=user.pk).update(
-                        points=F('points') + points_awarded,
-                    )
+                        User.objects.filter(pk=user.pk).update(
+                            points=F('points') + points_awarded,
+                        )
 
-                    breakdown = list(
-                        QuizAnswer.objects
-                        .filter(attempt=attempt)
-                        .select_related('question')
-                        .order_by('question__id'),
-                    )
-                    result = (attempt, breakdown, points_awarded)
+                        breakdown = list(
+                            QuizAnswer.objects
+                            .filter(attempt=attempt)
+                            .select_related('question')
+                            .order_by('question__id')
+                        )
+                        result = (attempt, breakdown, points_awarded)
 
     if deferred_error is not None:
         raise deferred_error
@@ -464,7 +550,8 @@ def submit_daily_quiz(
 @transaction.atomic
 def forfeit_daily_quiz(*, user: User, reason: str = 'app_background') -> QuizAttempt | None:
     """Lock today's in-progress attempt at 0 points; idempotent."""
-    quiz = _get_today_quiz_locked()
+    today = local_today()
+    quiz = DailyQuiz.objects.filter(date=today).first()
     if quiz is None:
         return None
 
@@ -485,9 +572,6 @@ def forfeit_daily_quiz(*, user: User, reason: str = 'app_background') -> QuizAtt
     attempt.submitted_at = timezone.now()
     attempt.save(update_fields=['status', 'forfeit_reason', 'submitted_at'])
     return attempt
-
-
-# ─── Convenience for the views ────────────────────────────────────
 
 
 def attempt_status_value(attempt: QuizAttempt | None) -> str:

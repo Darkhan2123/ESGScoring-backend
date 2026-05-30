@@ -1,10 +1,17 @@
 """
-HTTP endpoints for the daily ESG quiz.
+HTTP endpoints for the daily ESG quiz (v2).
 
-The pattern mirrors :mod:`apps.events.views`: thin :class:`APIView` classes,
-role-scoped querysets at the top of each handler, and every mutation goes
-through :mod:`apps.quizzes.services` so transactional / anti-cheat logic
-stays in one place.
+Thin :class:`APIView` classes; every mutation goes through
+:mod:`apps.quizzes.services` so transactional / anti-cheat logic stays
+in one place.
+
+Endpoints:
+  * Manager (admin / org): question pool CRUD + daily-quiz analytics.
+  * Student: status, start, submit, forfeit, history.
+
+The manager surface no longer schedules daily quizzes by hand -- the
+server creates them lazily when the first student plays. See
+``apps.quizzes.services.start_daily_quiz``.
 """
 from __future__ import annotations
 
@@ -25,9 +32,7 @@ from .serializers import (
     AttemptAdminSerializer,
     AttemptStatusSerializer,
     BulkQuestionCreateSerializer,
-    DailyQuizCreateSerializer,
     DailyQuizListSerializer,
-    DailyQuizUpdateSerializer,
     ForfeitQuizSerializer,
     MyAttemptSerializer,
     QuestionAdminSerializer,
@@ -55,22 +60,12 @@ def _scope_questions_for(user):
         return Question.objects.all()
     try:
         organization = user.organization
-    except Exception:  # noqa: BLE001 — OneToOne reverse raises DoesNotExist
+    except Exception:  # noqa: BLE001 -- OneToOne reverse raises DoesNotExist
         return Question.objects.none()
     return Question.objects.filter(created_by=organization)
 
 
-def _scope_daily_quizzes_for(user):
-    if user.role == User.Role.ADMIN:
-        return DailyQuiz.objects.all()
-    try:
-        organization = user.organization
-    except Exception:  # noqa: BLE001
-        return DailyQuiz.objects.none()
-    return DailyQuiz.objects.filter(created_by=organization)
-
-
-# ─── Question pool (managers) ─────────────────────────────────────
+# --- Question pool (managers) ---------------------------------------------
 
 
 class QuestionListView(APIView):
@@ -86,7 +81,7 @@ class QuestionListView(APIView):
 
 
 class QuestionBulkCreateView(APIView):
-    """The only way to create questions — atomic batch upload."""
+    """The only way to create questions -- atomic batch upload (T/F + MC)."""
 
     permission_classes = [IsAuthenticated, IsAdminOrOrganization]
 
@@ -130,64 +125,17 @@ class QuestionDetailView(APIView):
         return Response({'detail': 'Question deactivated.'})
 
 
-# ─── Daily quiz curation (managers) ───────────────────────────────
+# --- Daily quiz analytics (managers, read-only) ---------------------------
 
 
-class DailyQuizListCreateView(APIView):
-    """List scheduled quizzes / schedule a new one."""
+class DailyQuizListView(APIView):
+    """Read-only list of past quiz days with attempt counts."""
 
     permission_classes = [IsAuthenticated, IsAdminOrOrganization]
 
     def get(self, request):
-        qs = _scope_daily_quizzes_for(request.user).order_by('-date')
+        qs = DailyQuiz.objects.all().order_by('-date')
         return paginate(qs, request, DailyQuizListSerializer)
-
-    def post(self, request):
-        serializer = DailyQuizCreateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        quiz = services.create_daily_quiz(
-            user=request.user,
-            quiz_date=serializer.validated_data['date'],
-            question_ids=serializer.validated_data['question_ids'],
-        )
-        return Response(
-            DailyQuizListSerializer(quiz).data,
-            status=status.HTTP_201_CREATED,
-        )
-
-
-class DailyQuizDetailView(APIView):
-    """Read / edit / delete a daily quiz owned by the caller."""
-
-    permission_classes = [IsAuthenticated, IsAdminOrOrganization]
-
-    def _get(self, request, pk):
-        return get_object_or_404(_scope_daily_quizzes_for(request.user), pk=pk)
-
-    def get(self, request, pk):
-        return Response(DailyQuizListSerializer(self._get(request, pk)).data)
-
-    def patch(self, request, pk):
-        quiz = self._get(request, pk)
-        serializer = DailyQuizUpdateSerializer(data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        quiz = services.update_daily_quiz(
-            user=request.user,
-            quiz=quiz,
-            is_published=serializer.validated_data.get('is_published'),
-            question_ids=serializer.validated_data.get('question_ids'),
-        )
-        return Response(DailyQuizListSerializer(quiz).data)
-
-    def delete(self, request, pk):
-        quiz = self._get(request, pk)
-        if quiz.attempts.exists():
-            return Response(
-                {'error': 'Cannot delete a daily quiz with existing attempts.'},
-                status=status.HTTP_409_CONFLICT,
-            )
-        quiz.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class DailyQuizAttemptsView(APIView):
@@ -196,36 +144,27 @@ class DailyQuizAttemptsView(APIView):
     permission_classes = [IsAuthenticated, IsAdminOrOrganization]
 
     def get(self, request, pk):
-        quiz = get_object_or_404(_scope_daily_quizzes_for(request.user), pk=pk)
+        quiz = get_object_or_404(DailyQuiz.objects.all(), pk=pk)
         attempts = quiz.attempts.select_related('user').order_by('-started_at')
         return paginate(attempts, request, AttemptAdminSerializer)
 
 
-# ─── Student-facing endpoints ─────────────────────────────────────
+# --- Student-facing endpoints ---------------------------------------------
 
 
 class TodayStatusView(APIView):
-    """Status-only payload — never returns the questions themselves."""
+    """Status-only payload -- never returns the questions themselves."""
 
     permission_classes = [IsAuthenticated, IsStudent]
 
     def get(self, request):
-        quiz, attempt = services.get_today_quiz_for_student(request.user)
-        if quiz is None:
-            return Response({
-                'available': False,
-                'daily_quiz_id': None,
-                'date': services.local_today().isoformat(),
-                'attempt_status': 'not_started',
-                'attempt': None,
-                'scoring': SCORING_CONST,
-                'time_limit_seconds': _time_limit(),
-            })
-
+        info = services.get_today_status_for_student(request.user)
+        attempt = info['attempt']
         return Response({
-            'available': True,
-            'daily_quiz_id': quiz.pk,
-            'date': quiz.date.isoformat(),
+            'available': info['available'],
+            'daily_quiz_id': info['daily_quiz_id'],
+            'date': info['date'],
+            'reason': info['reason'],
             'attempt_status': services.attempt_status_value(attempt),
             'attempt': (
                 AttemptStatusSerializer(attempt).data if attempt else None
@@ -236,12 +175,17 @@ class TodayStatusView(APIView):
 
 
 class TodayStartView(APIView):
-    """Begin or resume the student's attempt for today."""
+    """Begin or resume the student's attempt for today.
+
+    The first call of the day for any student auto-creates today's
+    :class:`DailyQuiz` row; this student gets 3 random questions
+    served via :class:`AttemptQuestion`.
+    """
 
     permission_classes = [IsAuthenticated, IsStudent]
 
     def post(self, request):
-        attempt, quiz, questions, server_now = services.start_daily_quiz(
+        attempt, quiz, served, server_now = services.start_daily_quiz(
             user=request.user,
         )
         return Response(
@@ -253,7 +197,7 @@ class TodayStartView(APIView):
                 'deadline_at': attempt.deadline_at,
                 'server_now': server_now,
                 'time_limit_seconds': _time_limit(),
-                'questions': QuizQuestionPublicSerializer(questions, many=True).data,
+                'questions': QuizQuestionPublicSerializer(served, many=True).data,
                 'scoring': SCORING_CONST,
             },
             status=status.HTTP_201_CREATED,
@@ -261,7 +205,10 @@ class TodayStartView(APIView):
 
 
 class TodaySubmitView(APIView):
-    """Submit answers and receive the score + breakdown."""
+    """Submit answers and receive the score + breakdown.
+
+    The breakdown reveals the correct answer + explanation per question.
+    """
 
     permission_classes = [IsAuthenticated, IsStudent]
 
@@ -280,7 +227,9 @@ class TodaySubmitView(APIView):
                 'daily_quiz_id': attempt.daily_quiz_id,
                 'correct_count': attempt.correct_count,
                 'points_awarded': points,
-                'breakdown': QuizAnswerBreakdownSerializer(breakdown, many=True).data,
+                'breakdown': QuizAnswerBreakdownSerializer(
+                    breakdown, many=True,
+                ).data,
                 'scoring': SCORING_CONST,
                 'total_points': request.user.points,
             },
