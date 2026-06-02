@@ -28,9 +28,7 @@ class RegisterSerializer(serializers.Serializer):
     full_name = serializers.CharField()
     password = serializers.CharField(write_only=True, min_length=6)
     student_id = serializers.CharField()
-    school = serializers.ChoiceField(
-        choices=User.School.choices, required=False, allow_null=True,
-    )
+    school = serializers.ChoiceField(choices=User.School.choices)
 
     def validate_email(self, value):
         if User.objects.filter(email=value).exists():
@@ -49,7 +47,7 @@ class RegisterSerializer(serializers.Serializer):
             password=validated_data['password'],
             full_name=validated_data['full_name'],
             student_id=validated_data['student_id'],
-            school=validated_data.get('school'),
+            school=validated_data['school'],
             role=User.Role.STUDENT,
         )
 

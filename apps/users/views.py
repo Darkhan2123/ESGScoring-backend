@@ -51,6 +51,18 @@ def _auth_payload(user: User) -> dict:
 # ─── Public endpoints ──────────────────────────────────────────────
 
 
+class SchoolListView(APIView):
+    """List the selectable schools for the registration ``school`` field."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        return Response([
+            {'value': value, 'label': label}
+            for value, label in User.School.choices
+        ])
+
+
 class RegisterView(APIView):
     """Self-service registration — always creates a ``STUDENT``."""
 

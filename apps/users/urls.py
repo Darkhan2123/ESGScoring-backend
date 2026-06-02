@@ -6,6 +6,7 @@ from .views import (
     LogoutView,
     MeView,
     ChangePasswordView,
+    SchoolListView,
     AdminCreateUserView,
     AdminListUsersView,
     AdminUserDetailView,
@@ -13,6 +14,7 @@ from .views import (
 
 urlpatterns = [
     # Public
+    path('schools/', SchoolListView.as_view(), name='schools'),
     path('register/', RegisterView.as_view(), name='register'),
     path('login/', LoginView.as_view(), name='login'),
     path('token/refresh/', RefreshTokenView.as_view(), name='token_refresh'),
