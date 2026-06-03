@@ -165,7 +165,7 @@ class TodayStatusView(APIView):
             'daily_quiz_id': info['daily_quiz_id'],
             'date': info['date'],
             'reason': info['reason'],
-            'attempt_status': services.attempt_status_value(attempt),
+            'attempt_status': info['attempt_status'],
             'attempt': (
                 AttemptStatusSerializer(attempt).data if attempt else None
             ),
@@ -189,6 +189,7 @@ class TodayStartView(APIView):
         attempt, quiz, served, server_now = services.start_daily_quiz(
             user=request.user,
         )
+        request.user.refresh_from_db(fields=['points'])
         return Response(
             {
                 'daily_quiz_id': quiz.pk,
@@ -201,6 +202,8 @@ class TodayStartView(APIView):
                 'answered_count': attempt.answers.count(),
                 'questions': QuizQuestionPublicSerializer(served, many=True).data,
                 'scoring': SCORING_CONST,
+                'points_awarded': attempt.points_awarded,
+                'total_points': request.user.points,
             },
             status=status.HTTP_201_CREATED,
         )
@@ -209,9 +212,10 @@ class TodayStartView(APIView):
 class TodayAnswerView(APIView):
     """Submit ONE answer, get its result + explanation.
 
-    Questions must be answered in served order (1, then 2, then 3). The third
-    answer finalizes the attempt and the response also carries the final score
-    (``correct_count``, ``points_awarded``, ``total_points``).
+    Questions must be answered in served order (1, then 2, then 3). A correct
+    answer credits points immediately, so every response carries the running
+    ``correct_count``, ``points_awarded`` (this attempt) and ``total_points``
+    (the user's balance). The third answer also sets ``is_complete``.
     """
 
     permission_classes = [IsAuthenticated, IsStudent]
@@ -228,21 +232,18 @@ class TodayAnswerView(APIView):
             selected_bool=data.get('selected_bool'),
         )
 
+        request.user.refresh_from_db(fields=['points'])
         payload = {
             **QuizAnswerBreakdownSerializer(result['answer']).data,
             'position': result['position'],
             'answered_count': result['answered_count'],
             'total_questions': result['total_questions'],
             'is_complete': result['is_complete'],
+            'correct_count': result['correct_count'],
+            'points_awarded': result['points_awarded'],
+            'total_points': request.user.points,
+            'scoring': SCORING_CONST,
         }
-        if result['is_complete']:
-            request.user.refresh_from_db(fields=['points'])
-            payload.update({
-                'correct_count': result['correct_count'],
-                'points_awarded': result['points_awarded'],
-                'total_points': request.user.points,
-                'scoring': SCORING_CONST,
-            })
         return Response(payload, status=status.HTTP_201_CREATED)
 
 

@@ -267,9 +267,14 @@ def _get_or_create_today_quiz_locked() -> DailyQuiz:
 def get_today_status_for_student(user: User) -> dict:
     """Read-only payload for ``/today/``.
 
-    Reports whether the student CAN play today: there must be at least
-    3 active questions in the pool, OR a still-in-progress attempt that was
-    already created earlier in the day.
+    ``available`` means the student can start or resume right now:
+      * not started yet and the pool has >= 3 active questions, or
+      * an in-progress attempt that has not passed its deadline.
+    A terminal attempt (submitted/forfeited/expired) -- or an in-progress one
+    whose ``deadline_at`` has already passed -- reports ``available = False``
+    with ``reason = "already_played"``. The deadline check is computed here
+    only; the row is persisted as ``expired`` later by ``start``/``answer``
+    (this endpoint stays read-only).
     """
     today = local_today()
     quiz = DailyQuiz.objects.filter(date=today).first()
@@ -278,14 +283,27 @@ def get_today_status_for_student(user: User) -> dict:
         attempt = QuizAttempt.objects.filter(user=user, daily_quiz=quiz).first()
 
     if attempt is not None:
-        # The student already has an attempt today -- always available
-        # (whether it's in-progress, submitted, forfeited, or expired).
+        now = timezone.now()
+        effectively_expired = (
+            attempt.status == QuizAttempt.Status.IN_PROGRESS
+            and now > attempt.deadline_at
+        )
+        if effectively_expired:
+            attempt_status = QuizAttempt.Status.EXPIRED
+        else:
+            attempt_status = attempt.status
+
+        playable = (
+            attempt.status == QuizAttempt.Status.IN_PROGRESS
+            and not effectively_expired
+        )
         return {
-            'available': True,
+            'available': playable,
             'daily_quiz_id': quiz.pk,
             'date': today.isoformat(),
             'attempt': attempt,
-            'reason': None,
+            'attempt_status': attempt_status,
+            'reason': None if playable else 'already_played',
         }
 
     pool_count = Question.objects.filter(is_active=True).count()
@@ -295,6 +313,7 @@ def get_today_status_for_student(user: User) -> dict:
             'daily_quiz_id': None,
             'date': today.isoformat(),
             'attempt': None,
+            'attempt_status': 'not_started',
             'reason': 'pool_exhausted',
         }
 
@@ -303,6 +322,7 @@ def get_today_status_for_student(user: User) -> dict:
         'daily_quiz_id': quiz.pk if quiz else None,
         'date': today.isoformat(),
         'attempt': None,
+        'attempt_status': 'not_started',
         'reason': None,
     }
 
@@ -311,6 +331,10 @@ def start_daily_quiz(
     *, user: User,
 ) -> tuple[QuizAttempt, DailyQuiz, list[AttemptQuestion], datetime]:
     """Create-or-resume today's attempt for ``user``.
+
+    Creating a fresh attempt immediately grants ``SUBMIT_BASE_POINTS`` (the
+    base reward for starting); resuming an in-progress attempt does not
+    re-award it. Correct answers add points later in ``answer_question``.
 
     Returns ``(attempt, daily_quiz, served_questions, server_now)``.
 
@@ -369,6 +393,7 @@ def start_daily_quiz(
                     daily_quiz=quiz,
                     status=QuizAttempt.Status.IN_PROGRESS,
                     deadline_at=now + timedelta(seconds=_time_limit_seconds()),
+                    points_awarded=SUBMIT_BASE_POINTS,
                 )
                 AttemptQuestion.objects.bulk_create([
                     AttemptQuestion(
@@ -378,6 +403,11 @@ def start_daily_quiz(
                     )
                     for i, pid in enumerate(picks)
                 ])
+                # Base points are granted the moment the quiz starts; correct
+                # answers add POINTS_PER_CORRECT each as they come in.
+                User.objects.filter(pk=user.pk).update(
+                    points=F('points') + SUBMIT_BASE_POINTS,
+                )
                 server_now = now
 
     if deferred_error is not None:
@@ -402,11 +432,12 @@ def answer_question(
 
     Questions must be answered in served order (position 1, then 2, then 3).
     Each call stores one :class:`QuizAnswer` and returns whether it was
-    correct plus the explanation. The 3rd answer locks the attempt, scores it
-    server-side, and awards points (``15 + 5 * correct_count``).
+    correct plus the explanation. A correct answer credits
+    ``POINTS_PER_CORRECT`` immediately (the ``SUBMIT_BASE_POINTS`` base was
+    granted at start); the 3rd answer just locks the attempt as submitted.
 
-    Returns a dict with the saved ``answer`` and progress fields; when the
-    quiz is complete it also carries ``correct_count`` and ``points_awarded``.
+    Returns a dict with the saved ``answer`` plus progress fields and the
+    running ``correct_count`` / ``points_awarded`` for the attempt.
 
     Raises:
         NoQuizScheduledError: no quiz today, or the student never started one.
@@ -488,36 +519,35 @@ def answer_question(
                         )
 
                     if deferred_error is None:
+                        # A correct answer credits POINTS_PER_CORRECT right away
+                        # (the base SUBMIT_BASE_POINTS was already granted at
+                        # start). Points are never reverted, so leaving the quiz
+                        # keeps whatever was earned so far.
+                        if is_correct:
+                            attempt.correct_count += 1
+                            attempt.points_awarded += POINTS_PER_CORRECT
+                            User.objects.filter(pk=user.pk).update(
+                                points=F('points') + POINTS_PER_CORRECT,
+                            )
+
                         new_count = answered_count + 1
                         is_complete = new_count == QUESTIONS_PER_QUIZ
+                        update_fields = ['correct_count', 'points_awarded']
+                        if is_complete:
+                            attempt.status = QuizAttempt.Status.SUBMITTED
+                            attempt.submitted_at = now
+                            update_fields += ['status', 'submitted_at']
+                        attempt.save(update_fields=update_fields)
+
                         result = {
                             'answer': answer,
                             'position': expected.position,
                             'answered_count': new_count,
                             'total_questions': QUESTIONS_PER_QUIZ,
                             'is_complete': is_complete,
+                            'correct_count': attempt.correct_count,
+                            'points_awarded': attempt.points_awarded,
                         }
-                        if is_complete:
-                            correct_count = (
-                                attempt.answers.filter(is_correct=True).count()
-                            )
-                            points = (
-                                SUBMIT_BASE_POINTS
-                                + POINTS_PER_CORRECT * correct_count
-                            )
-                            attempt.status = QuizAttempt.Status.SUBMITTED
-                            attempt.correct_count = correct_count
-                            attempt.points_awarded = points
-                            attempt.submitted_at = now
-                            attempt.save(update_fields=[
-                                'status', 'correct_count',
-                                'points_awarded', 'submitted_at',
-                            ])
-                            User.objects.filter(pk=user.pk).update(
-                                points=F('points') + points,
-                            )
-                            result['correct_count'] = correct_count
-                            result['points_awarded'] = points
 
     if deferred_error is not None:
         raise deferred_error
