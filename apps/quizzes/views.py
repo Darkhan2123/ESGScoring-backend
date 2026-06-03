@@ -29,6 +29,7 @@ from apps.users.permissions import IsAdminOrOrganization, IsStudent
 from . import services
 from .models import DailyQuiz, Question, QuizAttempt
 from .serializers import (
+    AnswerQuestionSerializer,
     AttemptAdminSerializer,
     AttemptStatusSerializer,
     BulkQuestionCreateSerializer,
@@ -39,7 +40,6 @@ from .serializers import (
     QuestionUpdateSerializer,
     QuizAnswerBreakdownSerializer,
     QuizQuestionPublicSerializer,
-    SubmitQuizSerializer,
 )
 
 
@@ -169,6 +169,7 @@ class TodayStatusView(APIView):
             'attempt': (
                 AttemptStatusSerializer(attempt).data if attempt else None
             ),
+            'answered_count': attempt.answers.count() if attempt else 0,
             'scoring': SCORING_CONST,
             'time_limit_seconds': _time_limit(),
         })
@@ -197,6 +198,7 @@ class TodayStartView(APIView):
                 'deadline_at': attempt.deadline_at,
                 'server_now': server_now,
                 'time_limit_seconds': _time_limit(),
+                'answered_count': attempt.answers.count(),
                 'questions': QuizQuestionPublicSerializer(served, many=True).data,
                 'scoring': SCORING_CONST,
             },
@@ -204,37 +206,44 @@ class TodayStartView(APIView):
         )
 
 
-class TodaySubmitView(APIView):
-    """Submit answers and receive the score + breakdown.
+class TodayAnswerView(APIView):
+    """Submit ONE answer, get its result + explanation.
 
-    The breakdown reveals the correct answer + explanation per question.
+    Questions must be answered in served order (1, then 2, then 3). The third
+    answer finalizes the attempt and the response also carries the final score
+    (``correct_count``, ``points_awarded``, ``total_points``).
     """
 
     permission_classes = [IsAuthenticated, IsStudent]
 
     def post(self, request):
-        serializer = SubmitQuizSerializer(data=request.data)
+        serializer = AnswerQuestionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        attempt, breakdown, points = services.submit_daily_quiz(
+        data = serializer.validated_data
+        result = services.answer_question(
             user=request.user,
-            attempt_id=serializer.validated_data.get('attempt_id'),
-            answers=serializer.validated_data['answers'],
+            attempt_id=data.get('attempt_id'),
+            question_id=data['question_id'],
+            selected_index=data.get('selected_index'),
+            selected_bool=data.get('selected_bool'),
         )
-        request.user.refresh_from_db(fields=['points'])
-        return Response(
-            {
-                'detail': 'Quiz submitted.',
-                'daily_quiz_id': attempt.daily_quiz_id,
-                'correct_count': attempt.correct_count,
-                'points_awarded': points,
-                'breakdown': QuizAnswerBreakdownSerializer(
-                    breakdown, many=True,
-                ).data,
-                'scoring': SCORING_CONST,
+
+        payload = {
+            **QuizAnswerBreakdownSerializer(result['answer']).data,
+            'position': result['position'],
+            'answered_count': result['answered_count'],
+            'total_questions': result['total_questions'],
+            'is_complete': result['is_complete'],
+        }
+        if result['is_complete']:
+            request.user.refresh_from_db(fields=['points'])
+            payload.update({
+                'correct_count': result['correct_count'],
+                'points_awarded': result['points_awarded'],
                 'total_points': request.user.points,
-            },
-            status=status.HTTP_201_CREATED,
-        )
+                'scoring': SCORING_CONST,
+            })
+        return Response(payload, status=status.HTTP_201_CREATED)
 
 
 class TodayForfeitView(APIView):
