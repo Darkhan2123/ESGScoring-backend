@@ -7,10 +7,10 @@ from .views import (
     QuestionBulkCreateView,
     QuestionDetailView,
     QuestionListView,
+    TodayAnswerView,
     TodayForfeitView,
     TodayStartView,
     TodayStatusView,
-    TodaySubmitView,
 )
 
 urlpatterns = [
@@ -26,7 +26,7 @@ urlpatterns = [
     # Student
     path('today/', TodayStatusView.as_view(), name='quiz_today_status'),
     path('today/start/', TodayStartView.as_view(), name='quiz_today_start'),
-    path('today/submit/', TodaySubmitView.as_view(), name='quiz_today_submit'),
+    path('today/answer/', TodayAnswerView.as_view(), name='quiz_today_answer'),
     path('today/forfeit/', TodayForfeitView.as_view(), name='quiz_today_forfeit'),
     path('my-attempts/', MyAttemptsView.as_view(), name='quiz_my_attempts'),
 ]
