@@ -173,13 +173,15 @@ class AttemptStatusSerializer(serializers.ModelSerializer):
         ]
 
 
-class SubmitAnswerSerializer(serializers.Serializer):
-    """One incoming answer in the submit payload.
+class AnswerQuestionSerializer(serializers.Serializer):
+    """One incoming answer for ``/today/answer/``.
 
     Exactly one of ``selected_index`` or ``selected_bool`` must be provided;
-    the service layer rejects mismatches against the question's type.
+    the service layer rejects mismatches against the question's type and
+    enforces that questions are answered in served order.
     """
 
+    attempt_id = serializers.IntegerField(required=False)
     question_id = serializers.IntegerField()
     selected_index = serializers.IntegerField(
         min_value=0, max_value=3, required=False, allow_null=True,
@@ -194,17 +196,6 @@ class SubmitAnswerSerializer(serializers.Serializer):
                 'Provide exactly one of selected_index or selected_bool.',
             )
         return attrs
-
-
-class SubmitQuizSerializer(serializers.Serializer):
-    """Student submission for ``/today/submit/``."""
-
-    attempt_id = serializers.IntegerField(required=False)
-    answers = serializers.ListField(
-        child=SubmitAnswerSerializer(),
-        min_length=3,
-        max_length=3,
-    )
 
 
 class ForfeitQuizSerializer(serializers.Serializer):
