@@ -392,30 +392,28 @@ def start_daily_quiz(
     return attempt, attempt.daily_quiz, served, server_now
 
 
-def served_questions(attempt: QuizAttempt) -> list[AttemptQuestion]:
-    """Return the 3 :class:`AttemptQuestion` rows for ``attempt``, ordered."""
-    return list(
-        attempt.served_questions
-        .select_related('question')
-        .order_by('position')
-    )
+def answer_question(
+    *, user: User, question_id: int,
+    selected_index: int | None = None,
+    selected_bool: bool | None = None,
+    attempt_id: int | None = None,
+) -> dict:
+    """Record one answer, reveal its result, and finalize on the 3rd.
 
+    Questions must be answered in served order (position 1, then 2, then 3).
+    Each call stores one :class:`QuizAnswer` and returns whether it was
+    correct plus the explanation. The 3rd answer locks the attempt, scores it
+    server-side, and awards points (``15 + 5 * correct_count``).
 
-def submit_daily_quiz(
-    *, user: User, answers: list[dict], attempt_id: int | None = None,
-) -> tuple[QuizAttempt, list[QuizAnswer], int]:
-    """Score and lock the student's attempt for today.
-
-    ``answers`` is ``[{question_id, selected_index|selected_bool}, ...]``.
-    The shape per row must match the question's ``question_type``. Server-
-    side scoring guarantees the client cannot inflate points.
+    Returns a dict with the saved ``answer`` and progress fields; when the
+    quiz is complete it also carries ``correct_count`` and ``points_awarded``.
 
     Raises:
         NoQuizScheduledError: no quiz today, or the student never started one.
         AlreadySubmittedError: this attempt is already terminal.
         TimeLimitExceededError: ``deadline_at`` has passed.
-        InvalidQuizPayloadError: answers don't match the served set, or the
-            answer shape mismatches the question type.
+        InvalidQuizPayloadError: wrong/out-of-order question, or the answer
+            shape mismatches the question type.
     """
     today = local_today()
     quiz = DailyQuiz.objects.filter(date=today).first()
@@ -425,7 +423,7 @@ def submit_daily_quiz(
         )
 
     deferred_error: Exception | None = None
-    result: tuple[QuizAttempt, list[QuizAnswer], int] | None = None
+    result: dict | None = None
 
     with transaction.atomic():
         attempt_qs = (
@@ -455,92 +453,71 @@ def submit_daily_quiz(
                     'Time limit exceeded. Attempt forfeited.',
                 )
             else:
-                served_qs = list(
-                    attempt.served_questions.select_related('question')
+                served = list(
+                    attempt.served_questions
+                    .select_related('question')
+                    .order_by('position')
                 )
-                served_ids = {aq.question_id for aq in served_qs}
-                submitted_ids = [a['question_id'] for a in answers]
+                answered_count = attempt.answers.count()
+                # Strict order: the next unanswered slot is the only one we accept.
+                expected = served[answered_count]
 
-                if (
-                    len(submitted_ids) != QUESTIONS_PER_QUIZ
-                    or set(submitted_ids) != served_ids
-                ):
+                if question_id != expected.question_id:
                     deferred_error = InvalidQuizPayloadError(
-                        'Answers must match exactly the 3 questions you were served.',
+                        'Answer the questions in order.',
                     )
                 else:
-                    questions_by_id = {
-                        aq.question.pk: aq.question for aq in served_qs
-                    }
-                    correct_count = 0
-                    answer_rows: list[QuizAnswer] = []
-                    shape_error = False
-
-                    for a in answers:
-                        q = questions_by_id[a['question_id']]
-                        si = a.get('selected_index')
-                        sb = a.get('selected_bool')
-
-                        if q.question_type == _TF:
-                            if sb is None:
-                                shape_error = True
-                                break
-                            is_correct = (sb == q.answer)
-                            answer_rows.append(QuizAnswer(
-                                attempt=attempt,
-                                question=q,
-                                selected_index=None,
-                                selected_bool=sb,
-                                is_correct=is_correct,
-                            ))
-                        else:  # MC
-                            if si is None:
-                                shape_error = True
-                                break
-                            is_correct = (si == q.correct_index)
-                            answer_rows.append(QuizAnswer(
-                                attempt=attempt,
-                                question=q,
-                                selected_index=si,
-                                selected_bool=None,
-                                is_correct=is_correct,
-                            ))
-
-                        if is_correct:
-                            correct_count += 1
-
-                    if shape_error:
+                    q = expected.question
+                    if q.question_type == _TF and selected_bool is not None:
+                        is_correct = (selected_bool == q.answer)
+                        answer = QuizAnswer.objects.create(
+                            attempt=attempt, question=q,
+                            selected_index=None, selected_bool=selected_bool,
+                            is_correct=is_correct,
+                        )
+                    elif q.question_type == _MC and selected_index is not None:
+                        is_correct = (selected_index == q.correct_index)
+                        answer = QuizAnswer.objects.create(
+                            attempt=attempt, question=q,
+                            selected_index=selected_index, selected_bool=None,
+                            is_correct=is_correct,
+                        )
+                    else:
                         deferred_error = InvalidQuizPayloadError(
                             'Answer shape does not match the question type.',
                         )
-                    else:
-                        points_awarded = (
-                            SUBMIT_BASE_POINTS
-                            + POINTS_PER_CORRECT * correct_count
-                        )
 
-                        QuizAnswer.objects.bulk_create(answer_rows)
-
-                        attempt.status = QuizAttempt.Status.SUBMITTED
-                        attempt.correct_count = correct_count
-                        attempt.points_awarded = points_awarded
-                        attempt.submitted_at = now
-                        attempt.save(update_fields=[
-                            'status', 'correct_count',
-                            'points_awarded', 'submitted_at',
-                        ])
-
-                        User.objects.filter(pk=user.pk).update(
-                            points=F('points') + points_awarded,
-                        )
-
-                        breakdown = list(
-                            QuizAnswer.objects
-                            .filter(attempt=attempt)
-                            .select_related('question')
-                            .order_by('question__id')
-                        )
-                        result = (attempt, breakdown, points_awarded)
+                    if deferred_error is None:
+                        new_count = answered_count + 1
+                        is_complete = new_count == QUESTIONS_PER_QUIZ
+                        result = {
+                            'answer': answer,
+                            'position': expected.position,
+                            'answered_count': new_count,
+                            'total_questions': QUESTIONS_PER_QUIZ,
+                            'is_complete': is_complete,
+                        }
+                        if is_complete:
+                            correct_count = (
+                                attempt.answers.filter(is_correct=True).count()
+                            )
+                            points = (
+                                SUBMIT_BASE_POINTS
+                                + POINTS_PER_CORRECT * correct_count
+                            )
+                            attempt.status = QuizAttempt.Status.SUBMITTED
+                            attempt.correct_count = correct_count
+                            attempt.points_awarded = points
+                            attempt.submitted_at = now
+                            attempt.save(update_fields=[
+                                'status', 'correct_count',
+                                'points_awarded', 'submitted_at',
+                            ])
+                            User.objects.filter(pk=user.pk).update(
+                                points=F('points') + points,
+                            )
+                            result['correct_count'] = correct_count
+                            result['points_awarded'] = points
 
     if deferred_error is not None:
         raise deferred_error
