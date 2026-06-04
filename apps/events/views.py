@@ -253,7 +253,10 @@ class MyParticipationsView(APIView):
             student=request.user,
         ).select_related('task', 'task__organization')
         participations = apply_exact_filter(participations, request, 'status')
-        return paginate(participations, request, MyParticipationSerializer)
+        return paginate(
+            participations, request, MyParticipationSerializer,
+            context={'request': request},
+        )
 
 
 # ─── Organization endpoints ───────────────────────────────────────
@@ -343,7 +346,9 @@ class StudentHistoryView(APIView):
             participations = participations.filter(task__organization=org)
 
         return Response(
-            MyParticipationSerializer(participations, many=True).data,
+            MyParticipationSerializer(
+                participations, many=True, context={'request': request},
+            ).data,
         )
 
 
