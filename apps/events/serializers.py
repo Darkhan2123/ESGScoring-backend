@@ -155,6 +155,7 @@ class MyParticipationSerializer(serializers.ModelSerializer):
     organization_name = serializers.CharField(
         source='task.organization.name', read_only=True,
     )
+    image = serializers.SerializerMethodField()
     points_reward = serializers.IntegerField(
         source='task.points_reward', read_only=True,
     )
@@ -165,10 +166,13 @@ class MyParticipationSerializer(serializers.ModelSerializer):
     class Meta:
         model = TaskParticipation
         fields = [
-            'id', 'task_id', 'task_title', 'organization_name',
+            'id', 'task_id', 'task_title', 'organization_name', 'image',
             'points_reward', 'event_datetime', 'status',
             'created_at', 'updated_at',
         ]
+
+    def get_image(self, obj):
+        return resolve_image(obj.task, self.context.get('request'))
 
 
 class ApproveRejectSerializer(serializers.Serializer):
