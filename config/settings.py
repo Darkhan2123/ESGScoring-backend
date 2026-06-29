@@ -114,10 +114,21 @@ DATABASES = {
 # Cache Settings
 CACHES = {
     'default': {
-        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'BACKEND': 'django_redis.cache.RedisCache',
         'LOCATION': os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/1'),
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+        },
     }
 }
+
+CACHE_TTL_QUIZ_POOL   = 300
+CACHE_TTL_ORG_LIST    = 300
+CACHE_TTL_SHOP_LIST   = 120
+CACHE_TTL_SHOP_ITEMS  = 120
+CACHE_TTL_SHOP_DETAIL = 300
+CACHE_TTL_PROJECT_LIST = 120
+CACHE_TTL_SCHOOLS     = 86_400
 
 
 # Password validation

@@ -8,6 +8,7 @@ public (read-only), the owner (self-service PATCH), and admin (full CRUD +
 soft-delete).
 """
 from __future__ import annotations
+from django.conf import settings
 
 from rest_framework import status
 from rest_framework.generics import get_object_or_404
@@ -15,6 +16,13 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.core.cache import (
+    ORG_CACHE,
+    PROJECT_CACHE,
+    SHOP_CACHE,
+    cached_response,
+    invalidate_cache_families,
+)
 from apps.core.filters import apply_bool_filter, apply_search
 from apps.core.pagination import paginate
 from apps.users.permissions import IsAdmin, IsOrganization
@@ -38,9 +46,14 @@ class OrganizationListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        orgs = Organization.objects.filter(is_active=True).select_related('owner')
-        orgs = apply_search(orgs, request, ['name'])
-        return Response(OrganizationListSerializer(orgs, many=True).data)
+        def build_response():
+            orgs = Organization.objects.filter(is_active=True).select_related('owner')
+            orgs = apply_search(orgs, request, ['name'])
+            return Response(OrganizationListSerializer(orgs, many=True).data)
+
+        return cached_response(
+            request, ORG_CACHE, settings.CACHE_TTL_ORG_LIST, build_response,
+        )
 
 
 class OrganizationDetailView(APIView):
@@ -49,12 +62,16 @@ class OrganizationDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, org_id):
-        org = get_object_or_404(
-            Organization.objects.select_related('owner'),
-            pk=org_id,
-            is_active=True,
+        return cached_response(
+            request,
+            ORG_CACHE,
+            settings.CACHE_TTL_DETAIL,
+            lambda: Response(OrganizationSerializer(get_object_or_404(
+                Organization.objects.select_related('owner'),
+                pk=org_id,
+                is_active=True,
+            )).data),
         )
-        return Response(OrganizationSerializer(org).data)
 
 
 # ─── Organization owner endpoints ──────────────────────────────────
@@ -82,7 +99,9 @@ class MyOrganizationView(APIView):
             org, data=request.data, partial=True,
         )
         serializer.is_valid(raise_exception=True)
-        return Response(OrganizationSerializer(serializer.save()).data)
+        response = Response(OrganizationSerializer(serializer.save()).data)
+        invalidate_cache_families(ORG_CACHE, PROJECT_CACHE)
+        return response
 
 
 # ─── Admin endpoints ───────────────────────────────────────────────
@@ -97,6 +116,7 @@ class AdminCreateOrganizationView(APIView):
         serializer = CreateOrganizationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         org = serializer.save()
+        invalidate_cache_families(ORG_CACHE, PROJECT_CACHE)
         return Response(
             OrganizationSerializer(org).data,
             status=status.HTTP_201_CREATED,
@@ -134,10 +154,13 @@ class AdminOrganizationDetailView(APIView):
             org, data=request.data, partial=True,
         )
         serializer.is_valid(raise_exception=True)
-        return Response(OrganizationSerializer(serializer.save()).data)
+        response = Response(OrganizationSerializer(serializer.save()).data)
+        invalidate_cache_families(ORG_CACHE, PROJECT_CACHE)
+        return response
 
     def delete(self, request, org_id):
         org = self._get(org_id)
         org.is_active = False
         org.save(update_fields=['is_active'])
+        invalidate_cache_families(ORG_CACHE, PROJECT_CACHE, SHOP_CACHE)
         return Response({'detail': 'Organization deactivated.'})
