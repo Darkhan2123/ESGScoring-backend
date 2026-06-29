@@ -8,6 +8,7 @@ Shared concerns (pagination, 404 handling) are delegated to helpers in
 endpoint.
 """
 from __future__ import annotations
+from django.conf import settings
 
 from rest_framework import status
 from rest_framework.generics import RetrieveUpdateAPIView, get_object_or_404
@@ -17,6 +18,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.core.filters import apply_exact_filter
+from apps.core.cache import SCHOOL_CACHE, cached_response
 from apps.core.pagination import paginate
 
 from .models import User
@@ -57,10 +59,15 @@ class SchoolListView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        return Response([
-            {'value': value, 'label': label}
-            for value, label in User.School.choices
-        ])
+        return cached_response(
+            request,
+            SCHOOL_CACHE,
+            settings.CACHE_TTL_SCHOOLS,
+            lambda: Response([
+                {'value': value, 'label': label}
+                for value, label in User.School.choices
+            ]),
+        )
 
 
 class RegisterView(APIView):

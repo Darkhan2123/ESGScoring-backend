@@ -14,6 +14,7 @@ server creates them lazily when the first student plays. See
 ``apps.quizzes.services.start_daily_quiz``.
 """
 from __future__ import annotations
+from django.conf import settings
 
 from rest_framework import status
 from rest_framework.generics import get_object_or_404
@@ -21,6 +22,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.core.cache import (
+    QUIZ_POOL_CACHE,
+    cached_response,
+    invalidate_cache_families,
+)
 from apps.core.filters import apply_bool_filter, apply_search
 from apps.core.pagination import paginate
 from apps.users.models import User
@@ -74,10 +80,19 @@ class QuestionListView(APIView):
     permission_classes = [IsAuthenticated, IsAdminOrOrganization]
 
     def get(self, request):
-        qs = _scope_questions_for(request.user).select_related('created_by')
-        qs = apply_bool_filter(qs, request, 'is_active')
-        qs = apply_search(qs, request, ['text'])
-        return paginate(qs, request, QuestionAdminSerializer)
+        def build_response():
+            qs = _scope_questions_for(request.user).select_related('created_by')
+            qs = apply_bool_filter(qs, request, 'is_active')
+            qs = apply_search(qs, request, ['text'])
+            return paginate(qs, request, QuestionAdminSerializer)
+
+        return cached_response(
+            request,
+            QUIZ_POOL_CACHE,
+            settings.CACHE_TTL_QUIZ_POOL,
+            build_response,
+            vary_on=f'user:{request.user.pk}:role:{request.user.role}',
+        )
 
 
 class QuestionBulkCreateView(APIView):
@@ -92,6 +107,7 @@ class QuestionBulkCreateView(APIView):
             user=request.user,
             items=serializer.validated_data['questions'],
         )
+        invalidate_cache_families(QUIZ_POOL_CACHE)
         return Response(
             {'created': created, 'ids': ids},
             status=status.HTTP_201_CREATED,
@@ -116,12 +132,14 @@ class QuestionDetailView(APIView):
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        invalidate_cache_families(QUIZ_POOL_CACHE)
         return Response(QuestionAdminSerializer(question).data)
 
     def delete(self, request, pk):
         question = self._get(request, pk)
         question.is_active = False
         question.save(update_fields=['is_active', 'updated_at'])
+        invalidate_cache_families(QUIZ_POOL_CACHE)
         return Response({'detail': 'Question deactivated.'})
 
 
