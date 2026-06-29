@@ -184,6 +184,7 @@ class TodayStartView(APIView):
     """
 
     permission_classes = [IsAuthenticated, IsStudent]
+    throttle_scope = 'quiz'
 
     def post(self, request):
         attempt, quiz, served, server_now = services.start_daily_quiz(
@@ -219,6 +220,7 @@ class TodayAnswerView(APIView):
     """
 
     permission_classes = [IsAuthenticated, IsStudent]
+    throttle_scope = 'quiz'
 
     def post(self, request):
         serializer = AnswerQuestionSerializer(data=request.data)
@@ -251,6 +253,7 @@ class TodayForfeitView(APIView):
     """Locks today's in-progress attempt at 0 points (called on app-background)."""
 
     permission_classes = [IsAuthenticated, IsStudent]
+    throttle_scope = 'quiz'
 
     def post(self, request):
         serializer = ForfeitQuizSerializer(data=request.data)

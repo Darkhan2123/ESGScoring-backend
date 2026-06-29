@@ -67,6 +67,7 @@ class RegisterView(APIView):
     """Self-service registration — always creates a ``STUDENT``."""
 
     permission_classes = [AllowAny]
+    throttle_scope = 'auth'
 
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
@@ -79,6 +80,7 @@ class LoginView(APIView):
     """Email + password authentication, returns a JWT token pair."""
 
     permission_classes = [AllowAny]
+    throttle_scope = 'auth'
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
@@ -91,6 +93,7 @@ class RefreshTokenView(APIView):
     """Exchange a valid refresh token for a new access/refresh pair."""
 
     permission_classes = [AllowAny]
+    throttle_scope = 'auth'
 
     def post(self, request):
         refresh_token = request.data.get('refresh')
@@ -159,6 +162,7 @@ class ChangePasswordView(APIView):
     """Authenticated user changes their own password."""
 
     permission_classes = [IsAuthenticated]
+    throttle_scope = 'auth'
 
     def post(self, request):
         serializer = ChangePasswordSerializer(
