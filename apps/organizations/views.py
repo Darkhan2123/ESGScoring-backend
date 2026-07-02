@@ -49,7 +49,7 @@ class OrganizationListView(APIView):
         def build_response():
             orgs = Organization.objects.filter(is_active=True).select_related('owner')
             orgs = apply_search(orgs, request, ['name'])
-            return Response(OrganizationListSerializer(orgs, many=True).data)
+            return paginate(orgs, request, OrganizationListSerializer)
 
         return cached_response(
             request, ORG_CACHE, settings.CACHE_TTL_ORG_LIST, build_response,

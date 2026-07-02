@@ -117,14 +117,11 @@ class BulkQuestionCreateSerializer(serializers.Serializer):
 class DailyQuizListSerializer(serializers.ModelSerializer):
     """Slim list payload for managers browsing past quiz days."""
 
-    attempts_count = serializers.SerializerMethodField()
+    attempts_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = DailyQuiz
         fields = ['id', 'date', 'attempts_count', 'created_at', 'updated_at']
-
-    def get_attempts_count(self, obj):
-        return obj.attempts.count()
 
 
 # --- Student-facing serializers --------------------------------------------

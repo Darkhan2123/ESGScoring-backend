@@ -15,6 +15,7 @@ server creates them lazily when the first student plays. See
 """
 from __future__ import annotations
 from django.conf import settings
+from django.db.models import Count
 
 from rest_framework import status
 from rest_framework.generics import get_object_or_404
@@ -152,7 +153,9 @@ class DailyQuizListView(APIView):
     permission_classes = [IsAuthenticated, IsAdminOrOrganization]
 
     def get(self, request):
-        qs = DailyQuiz.objects.all().order_by('-date')
+        qs = DailyQuiz.objects.annotate(
+            attempts_count=Count('attempts')
+        ).order_by('-date')
         return paginate(qs, request, DailyQuizListSerializer)
 
 
