@@ -107,7 +107,7 @@ class ProjectDetailView(APIView):
             )
 
         return cached_response(
-            request, PROJECT_CACHE, settings.CACHE_TTL_DETAIL, build_response,
+            request, PROJECT_CACHE, settings.CACHE_PROJECT_DETAIL_TTL, build_response,
         )
 
 
