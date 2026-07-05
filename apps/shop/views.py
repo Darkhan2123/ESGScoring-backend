@@ -83,7 +83,7 @@ class ShopListView(APIView):
             shops = shops.annotate(
                 _items_count=Count('items', filter=Q(items__is_active=True)),
             )
-            return paginate(shops, request, ShopListSerializer)
+            return paginate(shops.order_by('-created_at'), request, ShopListSerializer)
 
         return cached_response(
             request, SHOP_CACHE, settings.CACHE_TTL_SHOP_LIST, build_response,
@@ -117,7 +117,7 @@ class ShopItemListView(APIView):
             items = ShopItem.objects.filter(
                 shop_id=shop_id, is_active=True,
             ).select_related('shop')
-            return paginate(items, request, ShopItemListSerializer)
+            return paginate(items.order_by('-created_at'), request, ShopItemListSerializer)
 
         return cached_response(
             request, SHOP_CACHE, settings.CACHE_TTL_SHOP_ITEMS, build_response,
@@ -157,7 +157,7 @@ class MyPurchasesView(APIView):
             student=request.user,
         ).select_related('item', 'item__shop')
         purchases = apply_exact_filter(purchases, request, 'status')
-        return paginate(purchases, request, MyPurchaseSerializer)
+        return paginate(purchases.order_by('-created_at'), request, MyPurchaseSerializer)
 
 
 # ─── Shop owner endpoints ─────────────────────────────────────
@@ -257,7 +257,7 @@ class ShopPurchasesView(APIView):
             item__shop=shop,
         ).select_related('student', 'item')
         purchases = apply_exact_filter(purchases, request, 'status')
-        return paginate(purchases, request, ShopPurchaseSerializer)
+        return paginate(purchases.order_by('-created_at'), request, ShopPurchaseSerializer)
 
 
 class ConfirmPurchaseView(APIView):
@@ -347,7 +347,7 @@ class AdminShopListView(APIView):
         shops = apply_bool_filter(shops, request, 'is_active')
         shops = apply_search(shops, request, ['name'])
         shops = apply_exact_filter(shops, request, 'type', field='shop_type')
-        return paginate(shops, request, ShopSerializer)
+        return paginate(shops.order_by('-created_at'), request, ShopSerializer)
 
 
 class AdminShopDetailView(APIView):

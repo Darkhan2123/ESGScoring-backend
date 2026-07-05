@@ -85,7 +85,7 @@ class QuestionListView(APIView):
             qs = _scope_questions_for(request.user).select_related('created_by')
             qs = apply_bool_filter(qs, request, 'is_active')
             qs = apply_search(qs, request, ['text'])
-            return paginate(qs, request, QuestionAdminSerializer)
+            return paginate(qs.order_by('-created_at'), request, QuestionAdminSerializer)
 
         return cached_response(
             request,

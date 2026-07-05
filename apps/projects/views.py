@@ -80,7 +80,7 @@ class ProjectListView(APIView):
             projects = apply_exact_filter(projects, request, 'organization')
             projects = apply_search(projects, request, ['title'])
             return paginate(
-                projects, request, ProjectListSerializer,
+                projects.order_by('-created_at'), request, ProjectListSerializer,
                 context={'request': request},
             )
 
@@ -131,7 +131,7 @@ class MyProjectsView(APIView):
         projects = apply_bool_filter(projects, request, 'is_active')
         projects = apply_search(projects, request, ['title'])
         return paginate(
-            projects, request, ProjectOwnerSerializer,
+            projects.order_by('-created_at'), request, ProjectOwnerSerializer,
             context={'request': request},
         )
 
@@ -207,7 +207,7 @@ class AdminProjectListView(APIView):
         projects = apply_exact_filter(projects, request, 'organization')
         projects = apply_search(projects, request, ['title'])
         return paginate(
-            projects, request, ProjectOwnerSerializer,
+            projects.order_by('-created_at'), request, ProjectOwnerSerializer,
             context={'request': request},
         )
 
