@@ -3,7 +3,8 @@ from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
-from rest_framework.test import APITestCase
+from rest_framework.response import Response
+from rest_framework.test import APITestCase, APIRequestFactory
 
 from apps.core.cache import (
     ORG_CACHE,
@@ -11,6 +12,7 @@ from apps.core.cache import (
     QUIZ_POOL_CACHE,
     SCHOOL_CACHE,
     SHOP_CACHE,
+    cached_response,
     invalidate_cache_families,
 )
 from apps.organizations.models import Organization
@@ -64,6 +66,194 @@ class ThrottlingTestCase(TestCase):
         self.assertIn('wait', data)
         self.assertGreater(data['wait'], 0)
         self.assertTrue(data['error'].startswith('Request was throttled.'))
+
+
+@override_settings(CACHES=TEST_CACHE)
+class CachedResponseFilteringTests(TestCase):
+    """cached_response() should only cache HTTP 200 responses."""
+
+    def setUp(self):
+        cache.clear()
+        self.factory = APIRequestFactory()
+        self.family = SCHOOL_CACHE
+        self.ttl = 300
+
+    def test_non_200_not_cached(self):
+        """A builder that returns a non-200 should NOT be cached — builder runs again."""
+        request = self.factory.get('/api/auth/schools/')
+
+        call_count = 0
+
+        def error_builder():
+            nonlocal call_count
+            call_count += 1
+            return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        response1 = cached_response(request, self.family, self.ttl, error_builder)
+        self.assertEqual(response1.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(call_count, 1, 'Builder should have run once on first call')
+
+        # Second call — must NOT be served from cache
+        response2 = cached_response(request, self.family, self.ttl, error_builder)
+        self.assertEqual(response2.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(call_count, 2, 'Builder must run again — non-200 should not be cached')
+
+    def test_200_is_cached(self):
+        """A builder that returns 200 should be cached — second call skips builder."""
+        request = self.factory.get('/api/auth/schools/')
+
+        call_count = 0
+
+        def success_builder():
+            nonlocal call_count
+            call_count += 1
+            return Response({'data': 'hello'}, status=status.HTTP_200_OK)
+
+        response1 = cached_response(request, self.family, self.ttl, success_builder)
+        self.assertEqual(response1.status_code, status.HTTP_200_OK)
+        self.assertEqual(call_count, 1)
+
+        # Second call — served from cache, builder should NOT run
+        response2 = cached_response(request, self.family, self.ttl, success_builder)
+        self.assertEqual(response2.status_code, status.HTTP_200_OK)
+        self.assertEqual(call_count, 1, 'Builder should NOT run again — served from cache')
+        self.assertEqual(response2.data, {'data': 'hello'})
+
+    def test_error_then_success_not_cross_contaminated(self):
+        """An error response for one URL should not pollute a success for another."""
+        error_request = self.factory.get('/api/shops/?page=1')
+        success_request = self.factory.get('/api/shops/')
+
+        call_count = 0
+
+        def builder(url_type: str):
+            nonlocal call_count
+            call_count += 1
+            if url_type == 'error':
+                return Response({'error': 'fail'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'data': 'ok'}, status=status.HTTP_200_OK)
+
+        # Fire an error (not cached)
+        cached_response(
+            error_request, self.family, self.ttl,
+            lambda: builder('error'),
+        )
+        self.assertEqual(call_count, 1)
+
+        # Fire a success (should be cached)
+        cached_response(
+            success_request, self.family, self.ttl,
+            lambda: builder('success'),
+        )
+        self.assertEqual(call_count, 2)
+
+        # Same success again (cache hit — builder not called)
+        cached_response(
+            success_request, self.family, self.ttl,
+            lambda: builder('success'),
+        )
+        self.assertEqual(call_count, 2, 'Success response should be cached')
+
+        # Error again (builder must run — not cached)
+        cached_response(
+            error_request, self.family, self.ttl,
+            lambda: builder('error'),
+        )
+        self.assertEqual(call_count, 3, 'Error response should NOT be cached')
+
+
+@override_settings(CACHES=TEST_CACHE)
+class CachedResponseVaryOnTests(TestCase):
+    """vary_on parameter should scope cache keys so different scopes are isolated."""
+
+    def setUp(self):
+        cache.clear()
+        self.factory = APIRequestFactory()
+        self.family = QUIZ_POOL_CACHE
+        self.ttl = 300
+
+    def test_different_vary_on_produce_different_keys(self):
+        """Different vary_on values should result in separate cache entries."""
+        request = self.factory.get('/api/quizzes/questions/')
+
+        call_count = 0
+
+        def builder():
+            nonlocal call_count
+            call_count += 1
+            return Response({'questions': []}, status=status.HTTP_200_OK)
+
+        # First user (admin)
+        cached_response(
+            request, self.family, self.ttl, builder,
+            vary_on='user:1:role:admin',
+        )
+        self.assertEqual(call_count, 1)
+
+        # Second user (org) — different vary_on, should be a cache miss
+        cached_response(
+            request, self.family, self.ttl, builder,
+            vary_on='user:2:role:org',
+        )
+        self.assertEqual(call_count, 2, 'Different vary_on must produce a cache miss')
+
+        # First user again — should hit cache
+        cached_response(
+            request, self.family, self.ttl, builder,
+            vary_on='user:1:role:admin',
+        )
+        self.assertEqual(call_count, 2, 'Same vary_on should be a cache hit')
+
+    def test_no_vary_on_vs_vary_on_are_isolated(self):
+        """A request without vary_on should not share cache with one that has it."""
+        request = self.factory.get('/api/quizzes/questions/')
+
+        call_count = 0
+
+        def builder():
+            nonlocal call_count
+            call_count += 1
+            return Response({'data': 'content'}, status=status.HTTP_200_OK)
+
+        # Cache without vary_on
+        cached_response(request, self.family, self.ttl, builder)
+        self.assertEqual(call_count, 1)
+
+        # Same request with vary_on — should be a different key
+        cached_response(
+            request, self.family, self.ttl, builder,
+            vary_on='user:1:role:student',
+        )
+        self.assertEqual(call_count, 2, 'vary_on vs no vary_on must produce different keys')
+
+        # Without vary_on again — should hit the original cache
+        cached_response(request, self.family, self.ttl, builder)
+        self.assertEqual(call_count, 2, 'No-vary-on request should reuse its own cache entry')
+
+    def test_same_vary_on_different_paths_are_isolated(self):
+        """Even with same vary_on, different URL paths produce different cache keys."""
+        request_a = self.factory.get('/api/quizzes/questions/')
+        request_b = self.factory.get('/api/quizzes/questions/?is_active=true')
+
+        call_count = 0
+
+        def builder():
+            nonlocal call_count
+            call_count += 1
+            return Response({'ok': True}, status=status.HTTP_200_OK)
+
+        cached_response(
+            request_a, self.family, self.ttl, builder,
+            vary_on='user:1:role:admin',
+        )
+        self.assertEqual(call_count, 1)
+
+        # Different path + same vary_on — cache miss
+        cached_response(
+            request_b, self.family, self.ttl, builder,
+            vary_on='user:1:role:admin',
+        )
+        self.assertEqual(call_count, 2, 'Different URL paths must produce separate cache entries')
 
 
 @override_settings(CACHES=TEST_CACHE)
