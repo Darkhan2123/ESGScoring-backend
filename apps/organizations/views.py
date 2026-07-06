@@ -49,7 +49,7 @@ class OrganizationListView(APIView):
         def build_response():
             orgs = Organization.objects.filter(is_active=True).select_related('owner')
             orgs = apply_search(orgs, request, ['name'])
-            return paginate(orgs, request, OrganizationListSerializer)
+            return paginate(orgs.order_by('-created_at'), request, OrganizationListSerializer)
 
         return cached_response(
             request, ORG_CACHE, settings.CACHE_TTL_ORG_LIST, build_response,
@@ -132,7 +132,7 @@ class AdminOrganizationListView(APIView):
         orgs = Organization.objects.select_related('owner').all()
         orgs = apply_bool_filter(orgs, request, 'is_active')
         orgs = apply_search(orgs, request, ['name'])
-        return paginate(orgs, request, OrganizationSerializer)
+        return paginate(orgs.order_by('-created_at'), request, OrganizationSerializer)
 
 
 class AdminOrganizationDetailView(APIView):
