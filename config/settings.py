@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     'apps.projects',
     'apps.quizzes',
     'apps.rewards',
+    'apps.challenges',
     'apps.shop',
     'apps.users',
 ]
