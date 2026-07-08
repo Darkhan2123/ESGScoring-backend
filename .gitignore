@@ -13,3 +13,6 @@ __pycache__
 
 # DB
 db.sqlite3
+# Stress test
+tests/stress/test_users.json
+tests/stress/reports
