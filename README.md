@@ -101,6 +101,79 @@ response shapes.
 Access tokens are valid for 30 minutes; refresh tokens for 7 days and are rotated on
 use.
 
+## Eco-Challenge
+
+Eco-Challenge is a backend feature for student ESG activities.
+It allows users to complete daily and weekly eco-tasks, earn XP, maintain streaks, receive badges, and appear in the leaderboard.
+
+Main features
+
+* Daily and weekly ESG challenges
+* Challenge completion with XP rewards
+* Photo or screenshot evidence for selected challenges
+* Streak system
+* XP multiplier based on active streak
+* Eco levels based on total XP
+* Achievement badges
+* Personal Eco-Challenge profile
+* Leaderboard
+* Admin panel support
+
+Seed initial data
+
+To create default levels, challenges and badges, run:
+
+```bash
+python manage.py seed_challenges
+```
+
+This command creates:
+
+* Eco-Challenge levels
+* Daily challenges
+* Weekly challenges
+* Basic achievement badges
+
+API endpoints
+
+Eco-Challenge endpoints are available under:
+
+```text
+/api/challenges/
+```
+
+Available endpoints:
+
+```text
+GET  /api/challenges/daily/
+GET  /api/challenges/weekly/
+POST /api/challenges/{challenge_id}/complete/
+GET  /api/challenges/profile/
+GET  /api/challenges/completions/
+GET  /api/challenges/badges/
+GET  /api/challenges/badges/all/
+GET  /api/challenges/leaderboard/
+GET  /api/challenges/stats/
+```
+
+Most endpoints require JWT authentication.
+
+Testing
+
+Run the server:
+
+```bash
+python manage.py runserver
+```
+
+Open Swagger:
+
+```text
+http://127.0.0.1:8000/api/docs/
+```
+
+Use JWT authentication to test protected endpoints.
+
 ### Roles
 
 The platform defines four roles, stored on the user record:
