@@ -46,14 +46,9 @@ class OrganizationListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        def build_response():
-            orgs = Organization.objects.filter(is_active=True).select_related('owner')
-            orgs = apply_search(orgs, request, ['name'])
-            return paginate(orgs.order_by('-created_at'), request, OrganizationListSerializer)
-
-        return cached_response(
-            request, ORG_CACHE, settings.CACHE_TTL_ORG_LIST, build_response,
-        )
+        orgs = Organization.objects.filter(is_active=True).select_related('owner')
+        orgs = apply_search(orgs, request, ['name'])
+        return Response(OrganizationListSerializer(orgs, many=True).data)
 
 
 class OrganizationDetailView(APIView):

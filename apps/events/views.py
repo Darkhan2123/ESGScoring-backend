@@ -253,9 +253,8 @@ class MyParticipationsView(APIView):
             student=request.user,
         ).select_related('task', 'task__organization')
         participations = apply_exact_filter(participations, request, 'status')
-        return paginate(
-            participations.order_by('-created_at'), request, MyParticipationSerializer,
-            context={'request': request},
+        return Response(
+            MyParticipationSerializer(participations.order_by('-created_at'), many=True, context={'request': request}).data,
         )
 
 
@@ -293,8 +292,8 @@ class TaskRequestsView(APIView):
         )
         participations = task.participations.select_related('student').all()
         participations = apply_exact_filter(participations, request, 'status')
-        return paginate(
-            participations.order_by('-created_at'), request, ParticipationRequestSerializer,
+        return Response(
+            ParticipationRequestSerializer(participations.order_by('-created_at'), many=True).data,
         )
 
 
@@ -345,9 +344,8 @@ class StudentHistoryView(APIView):
                 return error
             participations = participations.filter(task__organization=org)
 
-        return paginate(
-            participations.order_by('-created_at'), request, MyParticipationSerializer,
-            context={'request': request},
+        return Response(
+            MyParticipationSerializer(participations.order_by('-created_at'), many=True, context={'request': request}).data,
         )
 
 
