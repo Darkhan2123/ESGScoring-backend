@@ -143,6 +143,71 @@ To create a superuser inside the running web container:
 ```bash
 docker-compose exec web python manage.py createsuperuser
 ```
+To seed data inside the running web container:
+```bash
+docker-compose exec web python manage.py seed
+```
+
+## Running Tests
+
+The project uses Django's built-in test framework (`unittest`-based). Tests live in each app under `apps/<app>/tests/` and are split into `test_views.py` (endpoint tests) and `test_services.py` (service/business logic tests).
+
+### Run all tests
+
+```bash
+python manage.py test
+```
+
+### Run tests for a specific app
+
+```bash
+python manage.py test apps.users
+python manage.py test apps.events
+python manage.py test apps.quizzes
+```
+
+### Run a specific test class or method
+
+```bash
+# Single test class
+python manage.py test apps.users.tests.test_views.UserAPITestCase
+
+# Single test method
+python manage.py test apps.quizzes.tests.test_services.DailyQuizServiceTest.test_daily_quiz_credits_points
+```
+
+### Test‑aware settings
+
+When you run tests, `config/settings.py` automatically detects `test` in `sys.argv` and overrides these settings — **no manual configuration needed**:
+
+| Setting | Override for tests | Benefit |
+|---------|-------------------|---------|
+| Database | `:memory:` SQLite | No test database to create/destroy |
+| Password hasher | `MD5PasswordHasher` | Faster user creation in test setup |
+| Cache backend | `LocMemCache` | No Redis dependency required |
+
+### Testing strategy
+
+Each endpoint test follows a **1 good case + 2 bad cases** pattern:
+
+1. **Happy path** — verify a valid request returns `200`/`201` and the correct response body.
+2. **Authentication / permission checks** — unauthenticated or wrong-role requests return `401`/`403`.
+3. **Validation errors** — invalid payloads return `400` with descriptive error details.
+
+This includes tests that deliberately trigger **"already taken" errors** — for example, attempting to create a shop or organization with a duplicate name to verify the unique constraint is enforced (`400` response). Seeing these tests pass is expected; they confirm business rules work correctly.
+
+### Performance tests
+
+The project includes k6-based stress tests for concurrency and performance validation (points spending, caching, throttling). See [`tests/stress/README.md`](tests/stress/README.md) for detailed instructions.
+
+```bash
+# Quick smoke test (1 user, end-to-end)
+k6 run tests/stress/smoke-test.js -e BASE_URL=http://localhost
+
+# Full load test (after generating test users)
+make -C tests/stress stress-setup
+make -C tests/stress stress-load-json
+```
 
 ## Architecture
 
