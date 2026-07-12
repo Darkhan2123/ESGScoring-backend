@@ -113,6 +113,7 @@ class BuyItemView(APIView):
     """Student purchases an item — the service layer owns the transaction."""
 
     permission_classes = [IsAuthenticated, IsStudent]
+    throttle_scope = 'purchases'
 
     def post(self, request, item_id):
         item = get_object_or_404(
@@ -268,6 +269,7 @@ class VerifyPromoCodeView(APIView):
     """External-shop owner redeems a promo code to complete a purchase."""
 
     permission_classes = [IsAuthenticated, IsShopOwner]
+    throttle_scope = 'purchases'
 
     def post(self, request):
         serializer = VerifyPromoCodeSerializer(data=request.data)

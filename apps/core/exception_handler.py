@@ -1,6 +1,6 @@
 from django.db import IntegrityError
 from rest_framework.views import exception_handler
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import ValidationError, Throttled
 from rest_framework.response import Response
 from rest_framework import status
 from .exceptions import (
@@ -68,6 +68,17 @@ def custom_exception_handler(exc, context):
                 'errors': detail,   # full per-field breakdown
             },
             status=response.status_code,
+        )
+
+    if response is not None and isinstance(exc, Throttled):
+        return Response(
+            {
+                'error': response.data.get('detail', str(exc)),
+                'error_code': 'THROTTLED',
+                'wait': exc.wait,
+            },
+            status=response.status_code,
+            headers=response.headers,
         )
 
     if response is not None:

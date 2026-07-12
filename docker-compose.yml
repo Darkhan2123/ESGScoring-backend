@@ -21,12 +21,22 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/1
     volumes:
       - static_files:/app/staticfiles
       - media_files:/app/media
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - esg_network
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
     networks:
       - esg_network
 

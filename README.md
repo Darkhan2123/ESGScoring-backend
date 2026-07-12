@@ -17,6 +17,133 @@ ESG-rating engine.
 - JWT authentication via `djangorestframework-simplejwt`
 - OpenAPI schema and Swagger UI via `drf-spectacular`
 
+## Getting Started
+
+### Prerequisites
+
+- **Python 3.12**
+- **Docker** (optional, for Postgres database or full-stack containerized execution)
+
+### 1. Clone the Repository
+
+Clone the project to your local machine:
+```bash
+git clone https://github.com/Darkhan2123/ESGScoring-backend.git
+cd ESGScoring-backend
+```
+
+### 2. Configure Environment Variables
+
+Copy the template environment file to create your own configuration:
+```bash
+cp .env.example .env
+```
+By default, the settings are configured to use an SQLite database (`db.sqlite3`) for quick local setup.
+
+---
+
+### Local Development
+
+This setup runs the Django server on your host machine.
+
+#### 1. Setup Virtual Environment
+
+
+```bash
+# Create
+python -m venv .venv
+
+# Activate (macOS/Linux)
+source .venv/bin/activate
+
+# Activate (Windows)
+.venv\Scripts\activate
+```
+
+#### 2. Install Dependencies
+
+```bash
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+#### 3. Select Database Choice
+
+* **Using SQLite (Default)**:
+  Ensure your `.env` has:
+  ```env
+  DB_ENGINE=django.db.backends.sqlite3
+  DB_NAME=db.sqlite3
+  ```
+
+* **Using PostgreSQL via Docker**:
+  If you want to use a real PostgreSQL database, spin up the local development db container:
+  ```bash
+  docker-compose -f docker-compose.dev.yml up -d
+  ```
+  And update your `.env` database block to:
+  ```env
+  DB_ENGINE=django.db.backends.postgresql
+  DB_NAME=esg_scoring
+  DB_USER=postgres
+  DB_PASSWORD=postgres
+  DB_HOST=localhost
+  DB_PORT=5432
+  ```
+
+#### 4. Run Migrations & Setup
+
+```bash
+# Run migrations
+python manage.py migrate
+
+# Create a superuser to access /admin/
+python manage.py createsuperuser
+```
+
+#### 5. Start Development Server
+
+```bash
+python manage.py runserver
+```
+The API and documentation will be available at:
+- Dev server: http://127.0.0.1:8000/
+- Docs: http://127.0.0.1:8000/api/docs/
+- Django Admin: http://127.0.0.1:8000/admin/
+
+---
+
+### Running the Full Stack with Docker
+
+If you prefer to run the entire backend stack (Django web container + PostgreSQL + Nginx reverse proxy) in Docker:
+
+#### 1. Setup Environment Configuration
+Ensure you configure appropriate DB settings in `.env` (the Django and DB containers use the same file to coordinate credentials):
+```env
+DB_ENGINE=django.db.backends.postgresql
+DB_NAME=esg_scoring
+DB_USER=postgres
+DB_PASSWORD=postgres
+DB_HOST=db
+DB_PORT=5432
+```
+
+#### 2. Build and Run Containers
+```bash
+docker-compose up --build -d
+```
+The entrypoint script will automatically wait for the database and apply migrations. 
+
+#### 3. Access Services
+- Nginx Gateway / API: http://localhost/
+- Interactive docs: http://localhost/api/docs/
+- Django Admin: http://localhost/admin/
+
+To create a superuser inside the running web container:
+```bash
+docker-compose exec web python manage.py createsuperuser
+```
+
 ## Architecture
 
 The project follows a layered structure:
