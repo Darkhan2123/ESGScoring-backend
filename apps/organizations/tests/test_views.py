@@ -96,9 +96,9 @@ class OrganizationListViewTests(OrganizationAPITestCase):
         
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
-        self.assertIn('results', data)
-        self.assertEqual(len(data['results']), 2)  # Only active orgs
-        org_names = [org['name'] for org in data['results']]
+        self.assertIsInstance(data, list)
+        self.assertEqual(len(data), 2)  # Only active orgs
+        org_names = [org['name'] for org in data]
         self.assertIn('Test Organization', org_names)
         self.assertIn('Another Organization', org_names)
 
@@ -109,11 +109,14 @@ class OrganizationListViewTests(OrganizationAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_get_organization_list_invalid_page(self):
-        """Invalid page parameter returns 404."""
+        """Invalid page parameter is ignored (no pagination)."""
         self.client.force_authenticate(self.student)
         response = self.client.get(reverse('organization_list'), {'page': 'invalid'})
         
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertIsInstance(data, list)
+        self.assertEqual(len(data), 2)
 
 
 class OrganizationDetailViewTests(OrganizationAPITestCase):

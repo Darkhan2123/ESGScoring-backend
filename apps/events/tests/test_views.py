@@ -402,9 +402,9 @@ class MyParticipationsViewTests(EventAPITestCase):
         response = self.client.get(reverse('my_participations'))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
-        self.assertIn('results', data)
-        self.assertEqual(len(data['results']), 1)
-        self.assertEqual(data['results'][0]['task_title'], 'Test Task')
+        self.assertIsInstance(data, list)
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]['task_title'], 'Test Task')
 
     def test_get_my_participations_unauthenticated(self):
         """Unauthenticated user cannot view participations list."""
@@ -482,9 +482,9 @@ class TaskRequestsViewTests(EventAPITestCase):
         response = self.client.get(reverse('task_requests', args=[self.task.pk]))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
-        self.assertIn('results', data)
-        self.assertEqual(len(data['results']), 1)
-        self.assertEqual(data['results'][0]['student_email'], 'student@example.com')
+        self.assertIsInstance(data, list)
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]['student_email'], 'student@example.com')
 
     def test_get_task_requests_non_org_forbidden(self):
         """Student cannot view task requests."""
@@ -560,8 +560,8 @@ class StudentHistoryViewTests(EventAPITestCase):
         response = self.client.get(reverse('student_history', args=[self.student.pk]))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
-        self.assertIn('results', data)
-        self.assertEqual(len(data['results']), 1)
+        self.assertIsInstance(data, list)
+        self.assertEqual(len(data), 1)
 
     def test_get_student_history_student_role_forbidden(self):
         """Student cannot view another student's participation history."""
