@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 import os
+import sys
 from pathlib import Path
 from datetime import timedelta
 from dotenv import load_dotenv
@@ -114,10 +115,23 @@ DATABASES = {
 # Cache Settings
 CACHES = {
     'default': {
-        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'BACKEND': 'django_redis.cache.RedisCache',
         'LOCATION': os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/1'),
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+        },
     }
 }
+
+CACHE_TTL_QUIZ_POOL   = 300
+CACHE_TTL_ORG_LIST    = 300
+CACHE_TTL_SHOP_LIST   = 120
+CACHE_TTL_SHOP_ITEMS  = 120
+CACHE_TTL_SHOP_DETAIL = 300
+CACHE_TTL_PROJECT_LIST = 120
+CACHE_TTL_SCHOOLS     = 86_400
+CACHE_PROJECT_DETAIL_TTL = 300
+CACHE_TTL_DETAIL      = 300
 
 
 # Password validation
@@ -256,3 +270,18 @@ LOGGING = {
         },
     },
 }
+
+# ---------- Test ----------
+if 'test' in sys.argv:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': ':memory:',
+        }
+    }
+    PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        }
+    }

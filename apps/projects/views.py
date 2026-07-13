@@ -9,6 +9,7 @@ Views are split into three audiences (public read, organization owner CRUD,
 admin override) matching the pattern in :mod:`apps.organizations.views`.
 """
 from __future__ import annotations
+from django.conf import settings
 
 from rest_framework import status
 from rest_framework.generics import get_object_or_404
@@ -16,6 +17,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.core.cache import (
+    PROJECT_CACHE,
+    cached_response,
+    invalidate_cache_families,
+)
 from apps.core.filters import apply_bool_filter, apply_exact_filter, apply_search
 from apps.core.pagination import paginate
 from apps.organizations.models import Organization
@@ -65,16 +71,21 @@ class ProjectListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        projects = (
-            Project.objects
-            .filter(is_active=True, organization__is_active=True)
-            .select_related('organization')
-        )
-        projects = apply_exact_filter(projects, request, 'organization')
-        projects = apply_search(projects, request, ['title'])
-        return paginate(
-            projects, request, ProjectListSerializer,
-            context={'request': request},
+        def build_response():
+            projects = (
+                Project.objects
+                .filter(is_active=True, organization__is_active=True)
+                .select_related('organization')
+            )
+            projects = apply_exact_filter(projects, request, 'organization')
+            projects = apply_search(projects, request, ['title'])
+            return paginate(
+                projects.order_by('-created_at'), request, ProjectListSerializer,
+                context={'request': request},
+            )
+
+        return cached_response(
+            request, PROJECT_CACHE, settings.CACHE_TTL_PROJECT_LIST, build_response,
         )
 
 
@@ -84,14 +95,19 @@ class ProjectDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, project_id):
-        project = get_object_or_404(
-            Project.objects.select_related('organization'),
-            pk=project_id,
-            is_active=True,
-            organization__is_active=True,
-        )
-        return Response(
-            ProjectSerializer(project, context={'request': request}).data,
+        def build_response():
+            project = get_object_or_404(
+                Project.objects.select_related('organization'),
+                pk=project_id,
+                is_active=True,
+                organization__is_active=True,
+            )
+            return Response(
+                ProjectSerializer(project, context={'request': request}).data,
+            )
+
+        return cached_response(
+            request, PROJECT_CACHE, settings.CACHE_PROJECT_DETAIL_TTL, build_response,
         )
 
 
@@ -115,7 +131,7 @@ class MyProjectsView(APIView):
         projects = apply_bool_filter(projects, request, 'is_active')
         projects = apply_search(projects, request, ['title'])
         return paginate(
-            projects, request, ProjectOwnerSerializer,
+            projects.order_by('-created_at'), request, ProjectOwnerSerializer,
             context={'request': request},
         )
 
@@ -128,6 +144,7 @@ class MyProjectsView(APIView):
         )
         serializer.is_valid(raise_exception=True)
         project = serializer.save()
+        invalidate_cache_families(PROJECT_CACHE)
         return Response(
             ProjectOwnerSerializer(project, context={'request': request}).data,
             status=status.HTTP_201_CREATED,
@@ -160,9 +177,11 @@ class MyProjectDetailView(APIView):
             project, data=request.data, partial=True,
         )
         serializer.is_valid(raise_exception=True)
+        saved_project = serializer.save()
+        invalidate_cache_families(PROJECT_CACHE)
         return Response(
             ProjectOwnerSerializer(
-                serializer.save(), context={'request': request},
+                saved_project, context={'request': request},
             ).data,
         )
 
@@ -170,6 +189,7 @@ class MyProjectDetailView(APIView):
         project = self._get(request, project_id)
         project.is_active = False
         project.save(update_fields=['is_active'])
+        invalidate_cache_families(PROJECT_CACHE)
         return Response({'detail': 'Project deactivated.'})
 
 
@@ -187,7 +207,7 @@ class AdminProjectListView(APIView):
         projects = apply_exact_filter(projects, request, 'organization')
         projects = apply_search(projects, request, ['title'])
         return paginate(
-            projects, request, ProjectOwnerSerializer,
+            projects.order_by('-created_at'), request, ProjectOwnerSerializer,
             context={'request': request},
         )
 
@@ -215,9 +235,11 @@ class AdminProjectDetailView(APIView):
             project, data=request.data, partial=True,
         )
         serializer.is_valid(raise_exception=True)
+        saved_project = serializer.save()
+        invalidate_cache_families(PROJECT_CACHE)
         return Response(
             ProjectOwnerSerializer(
-                serializer.save(), context={'request': request},
+                saved_project, context={'request': request},
             ).data,
         )
 
@@ -225,6 +247,7 @@ class AdminProjectDetailView(APIView):
         project = self._get(project_id)
         project.is_active = False
         project.save(update_fields=['is_active'])
+        invalidate_cache_families(PROJECT_CACHE)
         return Response({'detail': 'Project deactivated.'})
 
 

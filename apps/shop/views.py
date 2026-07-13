@@ -8,6 +8,7 @@ in :mod:`apps.shop.services` — these views only parse HTTP input, call a
 service, and serialise the response.
 """
 from __future__ import annotations
+from django.conf import settings
 
 from django.db.models import Count, Q
 from rest_framework import status
@@ -16,6 +17,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.core.cache import (
+    SHOP_CACHE,
+    cached_response,
+    invalidate_cache_families,
+)
 from apps.core.filters import apply_bool_filter, apply_exact_filter, apply_search
 from apps.core.pagination import paginate
 from apps.users.permissions import IsAdmin, IsShopOwner, IsStudent
@@ -70,13 +76,18 @@ class ShopListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        shops = Shop.objects.filter(is_active=True).select_related('owner')
-        shops = apply_search(shops, request, ['name'])
-        shops = apply_exact_filter(shops, request, 'type', field='shop_type')
-        shops = shops.annotate(
-            _items_count=Count('items', filter=Q(items__is_active=True)),
+        def build_response():
+            shops = Shop.objects.filter(is_active=True).select_related('owner')
+            shops = apply_search(shops, request, ['name'])
+            shops = apply_exact_filter(shops, request, 'type', field='shop_type')
+            shops = shops.annotate(
+                _items_count=Count('items', filter=Q(items__is_active=True)),
+            )
+            return paginate(shops.order_by('-created_at'), request, ShopListSerializer)
+
+        return cached_response(
+            request, SHOP_CACHE, settings.CACHE_TTL_SHOP_LIST, build_response,
         )
-        return paginate(shops, request, ShopListSerializer)
 
 
 class ShopDetailView(APIView):
@@ -85,10 +96,14 @@ class ShopDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, shop_id):
-        shop = get_object_or_404(
-            Shop.objects.select_related('owner'), pk=shop_id, is_active=True,
+        return cached_response(
+            request,
+            SHOP_CACHE,
+            settings.CACHE_TTL_DETAIL,
+            lambda: Response(ShopSerializer(get_object_or_404(
+                Shop.objects.select_related('owner'), pk=shop_id, is_active=True,
+            )).data),
         )
-        return Response(ShopSerializer(shop).data)
 
 
 class ShopItemListView(APIView):
@@ -97,13 +112,16 @@ class ShopItemListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, shop_id):
-        # Assert the parent shop exists and is active before listing items;
-        # returning an empty list for a deactivated shop would be misleading.
-        get_object_or_404(Shop, pk=shop_id, is_active=True)
-        items = ShopItem.objects.filter(
-            shop_id=shop_id, is_active=True,
-        ).select_related('shop')
-        return paginate(items, request, ShopItemListSerializer)
+        def build_response():
+            get_object_or_404(Shop, pk=shop_id, is_active=True)
+            items = ShopItem.objects.filter(
+                shop_id=shop_id, is_active=True,
+            ).select_related('shop')
+            return paginate(items.order_by('-created_at'), request, ShopItemListSerializer)
+
+        return cached_response(
+            request, SHOP_CACHE, settings.CACHE_TTL_SHOP_ITEMS, build_response,
+        )
 
 
 # ─── Student endpoints ─────────────────────────────────────────
@@ -121,6 +139,7 @@ class BuyItemView(APIView):
             pk=item_id, is_active=True,
         )
         purchase = services.purchase_item(user=request.user, item=item)
+        invalidate_cache_families(SHOP_CACHE)
 
         request.user.refresh_from_db(fields=['points'])
         data = MyPurchaseSerializer(purchase).data
@@ -138,7 +157,7 @@ class MyPurchasesView(APIView):
             student=request.user,
         ).select_related('item', 'item__shop')
         purchases = apply_exact_filter(purchases, request, 'status')
-        return paginate(purchases, request, MyPurchaseSerializer)
+        return paginate(purchases.order_by('-created_at'), request, MyPurchaseSerializer)
 
 
 # ─── Shop owner endpoints ─────────────────────────────────────
@@ -163,7 +182,9 @@ class MyShopView(APIView):
             shop, data=request.data, partial=True,
         )
         serializer.is_valid(raise_exception=True)
-        return Response(ShopSerializer(serializer.save()).data)
+        response = Response(ShopSerializer(serializer.save()).data)
+        invalidate_cache_families(SHOP_CACHE)
+        return response
 
 
 class CreateShopItemView(APIView):
@@ -180,6 +201,7 @@ class CreateShopItemView(APIView):
         )
         serializer.is_valid(raise_exception=True)
         item = serializer.save()
+        invalidate_cache_families(SHOP_CACHE)
         return Response(
             ShopItemSerializer(item).data, status=status.HTTP_201_CREATED,
         )
@@ -208,7 +230,9 @@ class ManageShopItemView(APIView):
             item, data=request.data, partial=True,
         )
         serializer.is_valid(raise_exception=True)
-        return Response(ShopItemSerializer(serializer.save()).data)
+        response = Response(ShopItemSerializer(serializer.save()).data)
+        invalidate_cache_families(SHOP_CACHE)
+        return response
 
     def delete(self, request, item_id):
         item, error = self._get_item(request.user, item_id)
@@ -216,6 +240,7 @@ class ManageShopItemView(APIView):
             return error
         item.is_active = False
         item.save(update_fields=['is_active'])
+        invalidate_cache_families(SHOP_CACHE)
         return Response({'detail': 'Item deactivated.'})
 
 
@@ -232,7 +257,7 @@ class ShopPurchasesView(APIView):
             item__shop=shop,
         ).select_related('student', 'item')
         purchases = apply_exact_filter(purchases, request, 'status')
-        return paginate(purchases, request, ShopPurchaseSerializer)
+        return paginate(purchases.order_by('-created_at'), request, ShopPurchaseSerializer)
 
 
 class ConfirmPurchaseView(APIView):
@@ -306,6 +331,7 @@ class AdminCreateShopView(APIView):
         serializer = CreateShopSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         shop = serializer.save()
+        invalidate_cache_families(SHOP_CACHE)
         return Response(
             ShopSerializer(shop).data, status=status.HTTP_201_CREATED,
         )
@@ -321,7 +347,7 @@ class AdminShopListView(APIView):
         shops = apply_bool_filter(shops, request, 'is_active')
         shops = apply_search(shops, request, ['name'])
         shops = apply_exact_filter(shops, request, 'type', field='shop_type')
-        return paginate(shops, request, ShopSerializer)
+        return paginate(shops.order_by('-created_at'), request, ShopSerializer)
 
 
 class AdminShopDetailView(APIView):
@@ -343,10 +369,13 @@ class AdminShopDetailView(APIView):
             shop, data=request.data, partial=True,
         )
         serializer.is_valid(raise_exception=True)
-        return Response(ShopSerializer(serializer.save()).data)
+        response = Response(ShopSerializer(serializer.save()).data)
+        invalidate_cache_families(SHOP_CACHE)
+        return response
 
     def delete(self, request, shop_id):
         shop = self._get(shop_id)
         shop.is_active = False
         shop.save(update_fields=['is_active'])
+        invalidate_cache_families(SHOP_CACHE)
         return Response({'detail': 'Shop deactivated.'})

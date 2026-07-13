@@ -106,7 +106,7 @@ class TaskListView(APIView):
         tasks = apply_search(tasks, request, ['title'])
         tasks = _annotate_for_student(tasks, request.user)
         return paginate(
-            tasks, request, TaskListSerializer, context={'request': request},
+            tasks.order_by('-created_at'), request, TaskListSerializer, context={'request': request},
         )
 
 
@@ -253,9 +253,8 @@ class MyParticipationsView(APIView):
             student=request.user,
         ).select_related('task', 'task__organization')
         participations = apply_exact_filter(participations, request, 'status')
-        return paginate(
-            participations, request, MyParticipationSerializer,
-            context={'request': request},
+        return Response(
+            MyParticipationSerializer(participations.order_by('-created_at'), many=True, context={'request': request}).data,
         )
 
 
@@ -294,7 +293,7 @@ class TaskRequestsView(APIView):
         participations = task.participations.select_related('student').all()
         participations = apply_exact_filter(participations, request, 'status')
         return Response(
-            ParticipationRequestSerializer(participations, many=True).data,
+            ParticipationRequestSerializer(participations.order_by('-created_at'), many=True).data,
         )
 
 
@@ -346,9 +345,7 @@ class StudentHistoryView(APIView):
             participations = participations.filter(task__organization=org)
 
         return Response(
-            MyParticipationSerializer(
-                participations, many=True, context={'request': request},
-            ).data,
+            MyParticipationSerializer(participations.order_by('-created_at'), many=True, context={'request': request}).data,
         )
 
 
@@ -374,7 +371,7 @@ class AdminTaskListView(APIView):
             ),
         )
         return paginate(
-            tasks, request, TaskSerializer, context={'request': request},
+            tasks.order_by('-created_at'), request, TaskSerializer, context={'request': request},
         )
 
 
