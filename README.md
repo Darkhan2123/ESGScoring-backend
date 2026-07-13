@@ -311,3 +311,58 @@ administrator.
   participation history and referential integrity.
 - The configured time zone is `Asia/Almaty`; timestamps are stored in UTC.
 - The `rewards` app is a placeholder and is not routed.
+
+
+## Deployment & Infrastructure
+
+The production stack runs on a single VPS with Docker Compose:
+
+```
+nginx:80 → gunicorn:8000 → Django → PostgreSQL + Redis
+```
+> **Note:** We'll migrate to university's servers soon
+
+### Services
+
+| Service | Image / Runtime | Role |
+|---------|----------------|------|
+| **nginx** | `nginx:1.25-alpine` | Reverse proxy, serves static & media files|
+| **web** | Python 3.12 / Gunicorn | Django application server (3 workers, 120 s timeout) |
+| **db** | `postgres:16-alpine` | Primary database |
+| **redis** | `redis:7-alpine` | Cache backend (`django-redis`) |
+
+### Container orchestration
+
+All services are defined in [`docker-compose.yml`](docker-compose.yml) and connected through a shared `esg_network` bridge network. Persistent data is stored in named volumes:
+
+- `postgres_data` — database files
+- `static_files` — collected Django static assets
+- `media_files` — user uploads (avatars, shop photos)
+
+### Deployment
+
+Deployment is configured through a GitHub Actions workflow ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)) triggered on pushes to `main`. The workflow SSHs into the VPS, pulls the latest code, rebuilds the web container, applies migrations, and restarts the stack.
+
+> **Note:** The GitHub Actions deploy workflow is currently not operational (secrets and VPS access are not configured ask about that from collaborators).
+
+### Key files for operations
+
+| File | Purpose |
+|------|---------|
+| `Dockerfile` | Builds the Django web container |
+| `entrypoint.sh` | Container startup: waits for DB, runs migrations, starts Gunicorn |
+| `nginx/nginx.conf` | Reverse proxy rules, static/media serving |
+| `.env` | Environment variables (database, Redis, secrets) — **not committed** |
+| `.env.example` | Template for local development |
+
+## Known Limitations & Future Work
+
+| Area | Current State | Desired Improvement |
+|------|--------------|-------------------|
+| **Student ID validation** | `student_id` is a free-text field — only uniqueness is checked. No integration with a university API to validate that the ID belongs to a real enrolled student. | Integrate with a university platform API to verify student IDs, sync enrollment status, and auto-populate name / school on registration. |
+| **Forgot / reset password** | Only `POST /api/auth/change-password/` exists, which requires the user to be logged in. | Add a full forgot-password flow with email-based reset token (send email → verify token → set new password). Requires an SMTP or transactional email service. |
+| **Background / async tasks** | All operations run synchronously in the request-response cycle. No task queue, no periodic jobs. | Introduce Celery (or Django Q / Huey) for email sending, cache warming, periodic cleanup of expired quizzes, and background points recalculation. |
+| **Student search for shop owners** | No dedicated endpoint for shop owners to look up a student by name / ID / email when confirming an internal purchase. | Add a `GET /api/shop/students/?q=...` endpoint (admin or shop-owner only) that searches users with `role=student`. |
+| **QR code scanning** | External shops use manually typed 8-character promo codes — error-prone and slow. | Generate QR codes for promo codes on the purchase receipt; add a scan endpoint that accepts a QR payload. |
+| **Events / projects automation** | Events and projects must be created manually through the API or seed command. | Add optional auto-publish scheduling, recurring event support, and an approval workflow before an event goes live. |
+| **Notifications** | No notification system — students are not informed when a purchase is confirmed, an event is approved, or a quiz is available. | Implement push notifications (Firebase Cloud Messaging) and / or an in-app notification feed. |

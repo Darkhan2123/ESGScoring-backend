@@ -19,25 +19,26 @@ Thank you for considering contributing! This document outlines the guidelines fo
 
 ## How to Contribute
 
-1. **Fork** the repository on GitHub.
-2. **Create a feature branch** from `main`:
+1. **Open an issue first** — For significant changes (new features, refactors, changes to data model or business logic), open a GitHub issue to discuss the approach before writing code. This avoids wasted effort if the maintainers have a different direction in mind. Trivial fixes (typos, minor bug fixes) can skip this step and go straight to a PR.
+2. **Fork** the repository on GitHub.
+3. **Create a feature branch** from `main`:
    ```bash
    git checkout -b feat/your-feature-name
    ```
    Use prefixes like `feat/`, `fix/`, `refactor/`, `docs/`, `chore/` for clarity.
-3. **Make your changes**, following the [code conventions](#code-conventions).
-4. **Write or update tests** for your changes. Follow the project's [testing strategy](#testing).
-5. **Run the full test suite** to ensure nothing is broken:
+4. **Make your changes**, following the [code conventions](#code-conventions).
+5. **Write or update tests** for your changes. Follow the project's [testing strategy](#testing).
+6. **Run the full test suite** to ensure nothing is broken:
    ```bash
    python manage.py test
    ```
-6. **Commit your changes** with clear, descriptive commit messages (see [Conventional Commits](https://www.conventionalcommits.org/) style preferred):
+7. **Commit your changes** with clear, descriptive commit messages (see [Conventional Commits](https://www.conventionalcommits.org/) style preferred):
    ```
    feat: add organisation event filter by date range
    fix: correct points deduction on purchase refund
    docs: update README with test instructions
    ```
-7. **Push your branch** to your fork and open a **Pull Request** against the `main` branch.
+8. **Push your branch** to your fork and open a **Pull Request** against the `main` branch.
 
 ## Code Conventions
 
