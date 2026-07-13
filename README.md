@@ -143,6 +143,71 @@ To create a superuser inside the running web container:
 ```bash
 docker-compose exec web python manage.py createsuperuser
 ```
+To seed data inside the running web container:
+```bash
+docker-compose exec web python manage.py seed
+```
+
+## Running Tests
+
+The project uses Django's built-in test framework (`unittest`-based). Tests live in each app under `apps/<app>/tests/` and are split into `test_views.py` (endpoint tests) and `test_services.py` (service/business logic tests).
+
+### Run all tests
+
+```bash
+python manage.py test
+```
+
+### Run tests for a specific app
+
+```bash
+python manage.py test apps.users
+python manage.py test apps.events
+python manage.py test apps.quizzes
+```
+
+### Run a specific test class or method
+
+```bash
+# Single test class
+python manage.py test apps.users.tests.test_views.UserAPITestCase
+
+# Single test method
+python manage.py test apps.quizzes.tests.test_services.DailyQuizServiceTest.test_daily_quiz_credits_points
+```
+
+### Test‑aware settings
+
+When you run tests, `config/settings.py` automatically detects `test` in `sys.argv` and overrides these settings — **no manual configuration needed**:
+
+| Setting | Override for tests | Benefit |
+|---------|-------------------|---------|
+| Database | `:memory:` SQLite | No test database to create/destroy |
+| Password hasher | `MD5PasswordHasher` | Faster user creation in test setup |
+| Cache backend | `LocMemCache` | No Redis dependency required |
+
+### Testing strategy
+
+Each endpoint test follows a **1 good case + 2 bad cases** pattern:
+
+1. **Happy path** — verify a valid request returns `200`/`201` and the correct response body.
+2. **Authentication / permission checks** — unauthenticated or wrong-role requests return `401`/`403`.
+3. **Validation errors** — invalid payloads return `400` with descriptive error details.
+
+This includes tests that deliberately trigger **"already taken" errors** — for example, attempting to create a shop or organization with a duplicate name to verify the unique constraint is enforced (`400` response). Seeing these tests pass is expected; they confirm business rules work correctly.
+
+### Performance tests
+
+The project includes k6-based stress tests for concurrency and performance validation (points spending, caching, throttling). See [`tests/stress/README.md`](tests/stress/README.md) for detailed instructions.
+
+```bash
+# Quick smoke test (1 user, end-to-end)
+k6 run tests/stress/smoke-test.js -e BASE_URL=http://localhost
+
+# Full load test (after generating test users)
+make -C tests/stress stress-setup
+make -C tests/stress stress-load-json
+```
 
 ## Architecture
 
@@ -246,3 +311,58 @@ administrator.
   participation history and referential integrity.
 - The configured time zone is `Asia/Almaty`; timestamps are stored in UTC.
 - The `rewards` app is a placeholder and is not routed.
+
+
+## Deployment & Infrastructure
+
+The production stack runs on a single VPS with Docker Compose:
+
+```
+nginx:80 → gunicorn:8000 → Django → PostgreSQL + Redis
+```
+> **Note:** We'll migrate to university's servers soon
+
+### Services
+
+| Service | Image / Runtime | Role |
+|---------|----------------|------|
+| **nginx** | `nginx:1.25-alpine` | Reverse proxy, serves static & media files|
+| **web** | Python 3.12 / Gunicorn | Django application server (3 workers, 120 s timeout) |
+| **db** | `postgres:16-alpine` | Primary database |
+| **redis** | `redis:7-alpine` | Cache backend (`django-redis`) |
+
+### Container orchestration
+
+All services are defined in [`docker-compose.yml`](docker-compose.yml) and connected through a shared `esg_network` bridge network. Persistent data is stored in named volumes:
+
+- `postgres_data` — database files
+- `static_files` — collected Django static assets
+- `media_files` — user uploads (avatars, shop photos)
+
+### Deployment
+
+Deployment is configured through a GitHub Actions workflow ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)) triggered on pushes to `main`. The workflow SSHs into the VPS, pulls the latest code, rebuilds the web container, applies migrations, and restarts the stack.
+
+> **Note:** The GitHub Actions deploy workflow is currently not operational (secrets and VPS access are not configured ask about that from collaborators).
+
+### Key files for operations
+
+| File | Purpose |
+|------|---------|
+| `Dockerfile` | Builds the Django web container |
+| `entrypoint.sh` | Container startup: waits for DB, runs migrations, starts Gunicorn |
+| `nginx/nginx.conf` | Reverse proxy rules, static/media serving |
+| `.env` | Environment variables (database, Redis, secrets) — **not committed** |
+| `.env.example` | Template for local development |
+
+## Known Limitations & Future Work
+
+| Area | Current State | Desired Improvement |
+|------|--------------|-------------------|
+| **Student ID validation** | `student_id` is a free-text field — only uniqueness is checked. No integration with a university API to validate that the ID belongs to a real enrolled student. | Integrate with a university platform API to verify student IDs, sync enrollment status, and auto-populate name / school on registration. |
+| **Forgot / reset password** | Only `POST /api/auth/change-password/` exists, which requires the user to be logged in. | Add a full forgot-password flow with email-based reset token (send email → verify token → set new password). Requires an SMTP or transactional email service. |
+| **Background / async tasks** | All operations run synchronously in the request-response cycle. No task queue, no periodic jobs. | Introduce Celery (or Django Q / Huey) for email sending, cache warming, periodic cleanup of expired quizzes, and background points recalculation. |
+| **Student search for shop owners** | No dedicated endpoint for shop owners to look up a student by name / ID / email when confirming an internal purchase. | Add a `GET /api/shop/students/?q=...` endpoint (admin or shop-owner only) that searches users with `role=student`. |
+| **QR code scanning** | External shops use manually typed 8-character promo codes — error-prone and slow. | Generate QR codes for promo codes on the purchase receipt; add a scan endpoint that accepts a QR payload. |
+| **Events / projects automation** | Events and projects must be created manually through the API or seed command. | Add optional auto-publish scheduling, recurring event support, and an approval workflow before an event goes live. |
+| **Notifications** | No notification system — students are not informed when a purchase is confirmed, an event is approved, or a quiz is available. | Implement push notifications (Firebase Cloud Messaging) and / or an in-app notification feed. |

@@ -88,6 +88,8 @@ k6 run tests/stress/load-test.js \
 
 Expect: ~3 minutes, gradual ramp-up to 15 VUs.
 
+> **Note:** During load tests you may see `400` responses with errors like **"already exists"** or **"already taken"** (e.g., duplicate shop names, organization names, or student IDs). These are expected — concurrent requests hit the unique constraint validation before the first request commits. They confirm the business rules work correctly, not a backend failure. It can be changed if it's inconsistent.
+
 > **Note:** HTML output may not be available in older k6 versions. Use JSON or CSV output instead.
 
 ### 5. (Optional) Output formats
@@ -203,4 +205,5 @@ tests/stress/
 | Slow event list | Cache miss stampede | Verify Redis is running and connected |
 | Connection refused | Gunicorn workers saturated | Increase `--workers` in entrypoint.sh |
 | `invalid output type 'html'` | Older k6 version doesn't support HTML output | Use JSON or CSV output instead |
+| 400 / **"already exists"** errors | Multiple concurrent requests try to create entities with the same name / ID, hitting unique constraint validation | Expected under concurrency — these validate business rules, not a backend bug. Check they remain below ~5 % of write requests. May be changed to keep consistency. |
 
