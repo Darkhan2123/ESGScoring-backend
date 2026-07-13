@@ -233,14 +233,18 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # ---------- Production security ----------
 # Enable these when you add SSL/HTTPS with a domain:
-# if not DEBUG:
-#     SECURE_SSL_REDIRECT = True
-#     SECURE_HSTS_SECONDS = 31536000
-#     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-#     SECURE_HSTS_PRELOAD = True
-#     SESSION_COOKIE_SECURE = True
-#     CSRF_COOKIE_SECURE = True
-#     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+if os.getenv('PRODUCTION_MODE', 'False') == 'True':
+    DEBUG = False
+    SECURE_SSL_REDIRECT = False
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    
+    FORCE_SCRIPT_NAME = '/esg-scoring'
+    
+    STATIC_URL = '/esg-scoring/static/'
+    MEDIA_URL = '/esg-scoring/media/'
+
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # ---------- Logging ----------
 LOGGING = {

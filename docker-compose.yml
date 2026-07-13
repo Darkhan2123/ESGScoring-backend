@@ -16,7 +16,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
-      - esg_network
+      - esg_scoring_network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 10s
@@ -40,21 +40,21 @@ services:
       redis:
         condition: service_started
     networks:
-      - esg_network
+      - esg_scoring_network
 
   redis:
     image: redis:7-alpine
     restart: unless-stopped
     logging: *default-logging
     networks:
-      - esg_network
+      - esg_scoring_network
 
   nginx:
     image: nginx:1.25-alpine
     restart: unless-stopped
     logging: *default-logging
-    ports:
-      - "80:80"
+    expose:
+      - "80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - static_files:/app/staticfiles:ro
@@ -62,7 +62,7 @@ services:
     depends_on:
       - web
     networks:
-      - esg_network
+      - esg_scoring_network
 
 volumes:
   postgres_data:
@@ -70,5 +70,5 @@ volumes:
   media_files:
 
 networks:
-  esg_network:
+  esg_scoring_network:
     driver: bridge
